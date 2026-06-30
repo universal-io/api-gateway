@@ -2,65 +2,65 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
 import { getPublicEnv } from "@/lib/env";
+import { ensureBombSquadUser } from "@/lib/supabase/bootstrap";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useBrowserSession } from "@/lib/supabase/use-browser-session";
 
 const env = getPublicEnv();
-type AuthMode = "signup" | "signin";
 
-export function AuthShell() {
-  const [mode, setMode] = useState<AuthMode>("signup");
+type AuthShellProps = {
+  initialProvider?: string;
+  initialStatus?: string;
+};
+
+export function AuthShell({ initialProvider, initialStatus }: AuthShellProps) {
   const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [session, setSession] = useState<Session | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const { isConfigured, session } = useBrowserSession();
+  const [notice, setNotice] = useState<string | null>(messageForStatus(initialStatus, initialProvider));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
-  const [hasSentCode, setHasSentCode] = useState(false);
+  const [hasSentLink, setHasSentLink] = useState(false);
 
   useEffect(() => {
-    if (!env.isConfigured) {
+    if (!session) {
       return;
     }
 
-    const supabase = getSupabaseBrowserClient();
-    void supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      if (data.session?.user.email) {
-        setEmail(data.session.user.email);
-      }
-    });
+    let isMounted = true;
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      if (nextSession?.user.email) {
-        setEmail(nextSession.user.email);
-      }
-    });
+    void ensureBombSquadUser(session)
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+        setErrorMessage(messageOf(error));
+      });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      isMounted = false;
+    };
+  }, [session]);
 
-  async function sendOtp() {
+  async function sendMagicLink(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
     if (!env.isConfigured || !email.trim()) {
       return;
     }
 
     setIsSending(true);
     setErrorMessage(null);
-    setStatusMessage(null);
+    setNotice(null);
 
     try {
       const supabase = getSupabaseBrowserClient();
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
         options: {
-          shouldCreateUser: mode === "signup",
+          emailRedirectTo: `${window.location.origin}/auth/callback?provider=email`,
         },
       });
 
@@ -68,12 +68,8 @@ export function AuthShell() {
         throw error;
       }
 
-      setHasSentCode(true);
-      setStatusMessage(
-        mode === "signup"
-          ? "登録用コードを送信しました。メールの OTP を入力してください。"
-          : "ログイン用コードを送信しました。メールの OTP を入力してください。"
-      );
+      setHasSentLink(true);
+      setNotice("ログイン用メールを送信しました。受信したメールのリンクを開くと、この画面に戻ってログインが完了します。");
     } catch (error) {
       setErrorMessage(messageOf(error));
     } finally {
@@ -81,34 +77,30 @@ export function AuthShell() {
     }
   }
 
-  async function verifyOtp() {
-    if (!env.isConfigured || !email.trim() || !otp.trim()) {
+  async function signInWithGoogle() {
+    if (!env.isConfigured) {
       return;
     }
 
-    setIsVerifying(true);
+    setIsGoogleSigningIn(true);
     setErrorMessage(null);
-    setStatusMessage(null);
+    setNotice(null);
 
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: otp.trim(),
-        type: "email",
+      const { error } = await supabase.auth.signInWithOAuth({
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback?provider=google`,
+        },
+        provider: "google",
       });
 
       if (error) {
         throw error;
       }
-
-      setOtp("");
-      setHasSentCode(false);
-      setStatusMessage(mode === "signup" ? "登録してログインしました。" : "ログインしました。");
     } catch (error) {
+      setIsGoogleSigningIn(false);
       setErrorMessage(messageOf(error));
-    } finally {
-      setIsVerifying(false);
     }
   }
 
@@ -119,7 +111,7 @@ export function AuthShell() {
 
     setIsSigningOut(true);
     setErrorMessage(null);
-    setStatusMessage(null);
+    setNotice(null);
 
     try {
       const supabase = getSupabaseBrowserClient();
@@ -127,9 +119,8 @@ export function AuthShell() {
       if (error) {
         throw error;
       }
-      setOtp("");
-      setHasSentCode(false);
-      setStatusMessage("ログアウトしました。");
+      setHasSentLink(false);
+      setNotice("ログアウトしました。");
     } catch (error) {
       setErrorMessage(messageOf(error));
     } finally {
@@ -137,214 +128,148 @@ export function AuthShell() {
     }
   }
 
+  if (!isConfigured) {
+    return (
+      <section className="rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
+        <h2 className="text-2xl font-semibold text-stone-950">ログイン</h2>
+        <p className="mt-3 text-sm leading-6 text-stone-600">
+          現在はログイン設定を確認しています。少し時間を置いて再度お試しください。
+        </p>
+      </section>
+    );
+  }
+
   return (
-    <section className="rounded-[2rem] border border-stone-950/10 bg-[#fbf7ef] p-6 text-stone-950 shadow-[0_30px_80px_rgba(22,14,3,0.2)]">
+    <section className="rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="font-mono text-xs uppercase tracking-[0.3em] text-stone-500">
-            Access
-          </div>
-          <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em]">
-            Bomb Squad account
+          <h2 className="text-2xl font-semibold text-stone-950">
+            {session ? "ログイン済み" : "ログイン"}
           </h2>
+          <p className="mt-3 text-sm leading-6 text-stone-600">
+            {session
+              ? "このブラウザでは Bomb Squad アカウントにログインできています。"
+              : "メールアドレスまたは Google アカウントでログインできます。"}
+          </p>
         </div>
-        <div className="rounded-full border border-stone-900/10 px-3 py-1 text-xs text-stone-600">
-          {session ? "ログイン済み" : "未ログイン"}
+        <div className="rounded-full border border-stone-200 px-3 py-1 text-xs text-stone-600">
+          {session ? "Signed in" : "Guest"}
         </div>
       </div>
 
-      {!env.isConfigured ? (
-        <div className="mt-8 rounded-3xl border border-dashed border-stone-400 bg-stone-950/[0.03] p-5">
-          <p className="text-sm leading-7 text-stone-700">
-            `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` を設定すると、
-            このページから Bomb Squad の登録・ログインができます。
-          </p>
+      {notice ? (
+        <div aria-live="polite" className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm leading-6 text-emerald-900">
+          {notice}
         </div>
-      ) : (
-        <div className="mt-8 space-y-5">
-          <div className="inline-flex rounded-full border border-stone-900/10 bg-stone-950/[0.04] p-1">
-            <button
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                mode === "signup"
-                  ? "bg-stone-950 text-stone-50"
-                  : "text-stone-700 hover:text-stone-950"
-              }`}
-              onClick={() => {
-                setMode("signup");
-                setHasSentCode(false);
-                setOtp("");
-                setStatusMessage(null);
-                setErrorMessage(null);
-              }}
-              type="button"
-            >
-              Sign up
-            </button>
-            <button
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                mode === "signin"
-                  ? "bg-stone-950 text-stone-50"
-                  : "text-stone-700 hover:text-stone-950"
-              }`}
-              onClick={() => {
-                setMode("signin");
-                setHasSentCode(false);
-                setOtp("");
-                setStatusMessage(null);
-                setErrorMessage(null);
-              }}
-              type="button"
-            >
-              Sign in
-            </button>
-          </div>
+      ) : null}
 
-          <div className="rounded-3xl border border-stone-900/10 bg-stone-950/[0.03] p-5">
-            <p className="text-sm text-stone-500">
-              {mode === "signup" ? "新規登録フロー" : "既存アカウントのログインフロー"}
-            </p>
-            <p className="mt-2 text-base leading-7 text-stone-800">
-              {mode === "signup"
-                ? "初回利用者向けです。email を送って OTP を受け取り、そのコードでアカウント作成とログインを完了します。"
-                : "既存ユーザー向けです。登録済み email に OTP を送り、そのコードでログインします。"}
+      {errorMessage ? (
+        <div aria-live="polite" className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-900">
+          {errorMessage}
+        </div>
+      ) : null}
+
+      {session?.user.email ? (
+        <div className="mt-8 space-y-6">
+          <div className="rounded-2xl border border-stone-200 bg-stone-50 p-5">
+            <div className="text-sm text-stone-500">アカウント</div>
+            <div className="mt-2 text-lg font-medium text-stone-950">{session.user.email}</div>
+            <p className="mt-3 text-sm leading-6 text-stone-600">
+              このブラウザでは現在このアカウントで利用できます。
             </p>
           </div>
-
-          <ol className="grid gap-3 rounded-3xl border border-orange-500/20 bg-orange-500/10 p-5 text-sm leading-7 text-stone-800">
-            <li>1. まず {mode === "signup" ? "登録したい" : "登録済みの"} email を入力して `Send code` を押します。</li>
-            <li>2. Supabase から届いた OTP を確認します。</li>
-            <li>3. そのあとで OTP 入力欄にコードを入れて `{mode === "signup" ? "Create account" : "Sign in"}` を押します。</li>
-          </ol>
-
-          <label className="block">
-            <span className="mb-2 block text-sm font-medium text-stone-700">Email</span>
-            <input
-              className="w-full rounded-2xl border border-stone-900/15 bg-white px-4 py-3 outline-none transition focus:border-orange-500"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@example.com"
-              type="email"
-            />
-          </label>
 
           <div className="flex flex-wrap gap-3">
             <button
-              className="rounded-full border border-stone-900/15 px-5 py-3 text-sm font-medium transition hover:border-stone-900 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={isSending || !email.trim()}
-              onClick={sendOtp}
+              className="rounded-full bg-stone-950 px-5 py-3 text-sm font-medium text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isSigningOut}
+              onClick={signOut}
               type="button"
             >
-              {isSending ? "Sending..." : mode === "signup" ? "Send sign-up code" : "Send sign-in code"}
-            </button>
-            {hasSentCode ? (
-              <div className="rounded-full bg-emerald-500/10 px-4 py-3 text-sm text-emerald-950">
-                コード送信済み。受信メールを確認してください。
-              </div>
-            ) : null}
-          </div>
-
-          {hasSentCode ? (
-            <>
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-stone-700">OTP code</span>
-                <input
-                  className="w-full rounded-2xl border border-stone-900/15 bg-white px-4 py-3 outline-none transition focus:border-orange-500"
-                  value={otp}
-                  onChange={(event) => setOtp(event.target.value)}
-                  placeholder="6-digit code"
-                  inputMode="numeric"
-                />
-              </label>
-
-              <div className="flex flex-wrap gap-3">
-                <button
-                  className="rounded-full bg-stone-950 px-5 py-3 text-sm font-semibold text-stone-50 transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={isVerifying || !email.trim() || !otp.trim()}
-                  onClick={verifyOtp}
-                  type="button"
-                >
-                  {isVerifying
-                    ? mode === "signup"
-                      ? "Creating account..."
-                      : "Signing in..."
-                    : mode === "signup"
-                      ? "Create account"
-                      : "Sign in"}
-                </button>
-                <button
-                  className="rounded-full border border-stone-900/15 px-5 py-3 text-sm font-semibold text-stone-800 transition hover:border-stone-900"
-                  onClick={() => {
-                    setHasSentCode(false);
-                    setOtp("");
-                    setStatusMessage(null);
-                    setErrorMessage(null);
-                  }}
-                  type="button"
-                >
-                  Start over
-                </button>
-              </div>
-            </>
-          ) : null}
-
-          {session ? (
-            <div className="flex flex-wrap gap-3">
-              <button
-                className="rounded-full border border-stone-900/15 px-5 py-3 text-sm font-semibold text-stone-800 transition hover:border-stone-900 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={isSigningOut}
-                onClick={signOut}
-                type="button"
-              >
-                {isSigningOut ? "Signing out..." : "Sign out"}
-              </button>
-            </div>
-          ) : null}
-
-          <div className="grid gap-3 lg:grid-cols-3">
-            <button className="rounded-2xl border border-stone-900/10 bg-stone-950/[0.03] px-4 py-4 text-left text-sm text-stone-500" disabled type="button">
-              Google
-              <span className="mt-2 block text-xs text-stone-400">next</span>
-            </button>
-            <button className="rounded-2xl border border-stone-900/10 bg-stone-950/[0.03] px-4 py-4 text-left text-sm text-stone-500" disabled type="button">
-              Apple ID
-              <span className="mt-2 block text-xs text-stone-400">next</span>
+              {isSigningOut ? "ログアウト中..." : "ログアウト"}
             </button>
             <Link
-              className="rounded-2xl border border-stone-900/10 bg-orange-500/10 px-4 py-4 text-left text-sm text-stone-800 transition hover:bg-orange-500/20"
+              className="rounded-full border border-stone-300 px-5 py-3 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:text-stone-950"
               href="/pricing"
             >
-              Pricing
-              <span className="mt-2 block text-xs text-stone-500">upgrade path</span>
+              料金プランを見る
             </Link>
           </div>
-
-          {session?.user.email ? (
-            <div className="rounded-3xl border border-emerald-700/20 bg-emerald-500/10 p-5">
-              <p className="text-sm text-emerald-800">現在のセッション</p>
-              <p className="mt-2 text-lg font-semibold text-emerald-950">{session.user.email}</p>
+        </div>
+      ) : (
+          <div className="mt-8">
+          <form className="space-y-5" onSubmit={sendMagicLink}>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-stone-700" htmlFor="email">
+                メールアドレス
+              </label>
+              <input
+                aria-describedby={hasSentLink ? "email-help" : errorMessage ? "email-error" : undefined}
+                aria-invalid={errorMessage ? "true" : "false"}
+                className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-stone-950 outline-none transition focus:border-stone-950"
+                id="email"
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@example.com"
+                type="email"
+                value={session?.user.email ?? email}
+              />
+              <p className="mt-2 text-sm text-stone-500" id={hasSentLink ? "email-help" : errorMessage ? "email-error" : undefined}>
+                {hasSentLink
+                  ? "メールを再送したい場合は、そのままもう一度送信できます。"
+                  : "入力したアドレス宛てにログインリンクを送信します。"}
+              </p>
             </div>
-          ) : null}
 
-          {statusMessage ? (
-            <div className="rounded-2xl border border-emerald-700/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-950">
-              {statusMessage}
-            </div>
-          ) : null}
+            <button
+              className="w-full rounded-full bg-stone-950 px-5 py-3 text-sm font-medium text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isSending || !email.trim()}
+              type="submit"
+            >
+              {isSending ? "送信中..." : hasSentLink ? "ログインリンクを再送" : "ログインリンクを送信"}
+            </button>
+          </form>
 
-          {errorMessage ? (
-            <div className="rounded-2xl border border-red-700/20 bg-red-500/10 px-4 py-3 text-sm text-red-950">
-              {errorMessage}
-            </div>
-          ) : null}
+          <div className="my-6 flex items-center gap-3">
+            <div className="h-px flex-1 bg-stone-200" />
+            <span className="text-sm text-stone-500">または</span>
+            <div className="h-px flex-1 bg-stone-200" />
+          </div>
+
+          <button
+            className="w-full rounded-full border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-800 transition hover:border-stone-400 hover:text-stone-950 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isGoogleSigningIn}
+            onClick={signInWithGoogle}
+            type="button"
+          >
+            {isGoogleSigningIn ? "Google に移動しています..." : "Google でログイン"}
+          </button>
+
+          <div className="mt-8 rounded-2xl border border-stone-200 bg-stone-50 p-5">
+            <h3 className="text-sm font-medium text-stone-950">ログイン方法</h3>
+            <ol className="mt-3 space-y-2 text-sm leading-6 text-stone-600">
+              <li>1. メールアドレスを入力するか、Google でログインを選びます。</li>
+              <li>2. 認証を完了すると、この画面に戻ります。</li>
+              <li>3. 「ログイン済み」とメールアドレスが表示されたら完了です。</li>
+            </ol>
+          </div>
         </div>
       )}
     </section>
   );
 }
 
+function messageForStatus(status: string | undefined, provider: string | undefined) {
+  if (status === "complete") {
+    return provider === "google"
+      ? "Google 認証が完了しました。ログイン済みです。"
+      : "メールリンクでのログインが完了しました。ログイン済みです。";
+  }
+  return null;
+}
+
 function messageOf(error: unknown) {
   if (isStatus500(error)) {
-    return "Supabase Auth の `/otp` が 500 を返しました。Email provider 未設定、OTP テンプレート未調整、または auth.users への既存 trigger / constraint が新規 user 作成を壊している可能性があります。Supabase の Auth logs と Postgres logs を確認してください。";
+    return "Supabase Auth が 500 を返しました。メールプロバイダ設定、Auth テンプレート、または auth.users まわりのDB設定を確認してください。";
   }
   if (error instanceof Error) {
     return error.message;
@@ -360,7 +285,7 @@ function messageOf(error: unknown) {
   try {
     return JSON.stringify(error);
   } catch {
-    return "Unknown authentication error";
+    return "認証処理で不明なエラーが発生しました。";
   }
 }
 

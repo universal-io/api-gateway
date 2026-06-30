@@ -3,7 +3,7 @@ This is the Bomb Squad web surface for Vercel deployment.
 ## Scope
 
 - product / landing pages
-- auth entrypoint for registration and login
+- auth entrypoint for email-link and Google login
 - future pricing and billing surface
 - future AI gateway and admin entrypoint
 
@@ -22,6 +22,8 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+Production origin is planned as `https://bombsquad.me`.
+
 ## Environment Variables
 
 - `NEXT_PUBLIC_SUPABASE_URL`
@@ -39,12 +41,14 @@ Server-only placeholders are already reserved for the later gateway and Stripe w
 ## Current Routes
 
 - `/` product top
-- `/auth` email OTP sign-in and sign-up
+- `/auth` email-link and Google sign-in
 - `/pricing` pricing draft
+- `/auth/callback` auth return route for email link and Google OAuth
 
 ## Next Steps
 
-- add Google OAuth and Apple ID
+- finish Google OAuth verification against local and production origins
+- add Apple ID
 - add `/api/ai/review`
 - add Stripe checkout and portal
 - add lightweight admin pages
