@@ -3,10 +3,16 @@
 // call provider -> record usage event -> return result + quota envelope.
 
 import { getServerEnv } from "@/lib/server/env";
+import { getSupabaseAdminClient } from "@/lib/server/supabase-admin";
 import {
-  getSupabaseAdminClient,
-  getSupabaseUserClient,
-} from "@/lib/server/supabase-admin";
+  authenticate,
+  currentMonthStartUTC,
+  errorResponse,
+  gatewayErrorResponse,
+  GatewayError,
+  nextMonthStartUTC,
+  recordUsage,
+} from "@/lib/server/gateway";
 import {
   ProviderCallError,
   runReview,
@@ -81,43 +87,14 @@ export async function POST(request: Request): Promise<Response> {
       return errorResponse(400, "BAD_REQUEST", "client.platform is required.", requestId);
     }
 
-    // --- Authentication ---
-    const authorization = request.headers.get("authorization") ?? "";
-    const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
-    if (!token) {
-      return errorResponse(401, "UNAUTHENTICATED", "Missing Supabase access token.", requestId);
-    }
-    const admin = getSupabaseAdminClient();
-    const { data: userData, error: userError } = await admin.auth.getUser(token);
-    if (userError || !userData?.user) {
-      return errorResponse(401, "UNAUTHENTICATED", "Invalid Supabase access token.", requestId);
-    }
-    const userId = userData.user.id;
+    // --- Authentication / tenant / entitlement ---
+    const { userId, tenantId, entitlement } = await authenticate(request);
 
-    // --- Tenant resolution (bootstrap lazily on first request) ---
-    let tenantId = await fetchDefaultTenantId(userId);
-    if (!tenantId) {
-      const userClient = getSupabaseUserClient(token);
-      await userClient.rpc("bs_initialize_current_user");
-      tenantId = await fetchDefaultTenantId(userId);
-    }
-    if (!tenantId) {
-      return errorResponse(403, "TENANT_ACCESS_DENIED", "No tenant found for this user.", requestId);
-    }
-
-    // --- Entitlement and quota ---
-    const { data: entitlement } = await admin
-      .from("bs_entitlements")
-      .select("plan, status, monthly_review_limit")
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
-    if (!entitlement || (entitlement.status !== "active" && entitlement.status !== "trialing")) {
-      return errorResponse(402, "PAYMENT_REQUIRED", "The current plan does not allow this operation.", requestId);
-    }
-
+    // --- Quota ---
     const env = getServerEnv();
     const limit = entitlement.monthly_review_limit ?? env.freeMonthlyReviewLimit;
     const periodStart = currentMonthStartUTC();
+    const admin = getSupabaseAdminClient();
     const { count } = await admin
       .from("bs_usage_events")
       .select("id", { count: "exact", head: true })
@@ -162,6 +139,8 @@ export async function POST(request: Request): Promise<Response> {
       const detail = error instanceof ProviderCallError ? error.message : String(error);
       console.error(`[/api/ai/review] provider error (request ${requestId}):`, detail);
       await recordUsage(tenantId, userId, {
+        operation: "review",
+        unitType: "review",
         requestId,
         status: "error",
         errorCode: "PROVIDER_ERROR",
@@ -173,6 +152,8 @@ export async function POST(request: Request): Promise<Response> {
     const latencyMs = Date.now() - started;
 
     await recordUsage(tenantId, userId, {
+      operation: "review",
+      unitType: "review",
       requestId,
       status: "success",
       modelVendor: engineOutput.modelVendor,
@@ -196,55 +177,11 @@ export async function POST(request: Request): Promise<Response> {
       quota: quota(used + 1),
     });
   } catch (error) {
+    if (error instanceof GatewayError) {
+      return gatewayErrorResponse(error, requestId);
+    }
     console.error("[/api/ai/review] internal error:", error);
     return errorResponse(500, "INTERNAL_ERROR", "Unclassified server failure.", requestId);
-  }
-}
-
-async function fetchDefaultTenantId(userId: string): Promise<string | null> {
-  const admin = getSupabaseAdminClient();
-  const { data } = await admin
-    .from("bs_profiles")
-    .select("default_tenant_id")
-    .eq("id", userId)
-    .maybeSingle();
-  return data?.default_tenant_id ?? null;
-}
-
-type UsageInput = {
-  requestId: string;
-  status: "success" | "error" | "blocked";
-  modelVendor?: string;
-  modelId?: string;
-  inputUnits?: number;
-  outputUnits?: number;
-  errorCode?: string;
-  latencyMs?: number;
-  metadata: Record<string, unknown>;
-};
-
-async function recordUsage(tenantId: string, userId: string, usage: UsageInput): Promise<void> {
-  const admin = getSupabaseAdminClient();
-  // Idempotency: (tenant_id, request_id) is unique. A duplicate insert means a
-  // client retry of an already-counted request; ignore the conflict. Only
-  // success rows carry the request_id so a failed attempt can be retried.
-  const { error } = await admin.from("bs_usage_events").insert({
-    tenant_id: tenantId,
-    user_id: userId,
-    operation: "review",
-    model_vendor: usage.modelVendor ?? null,
-    model_id: usage.modelId ?? null,
-    input_units: usage.inputUnits ?? 0,
-    output_units: usage.outputUnits ?? 0,
-    unit_type: "review",
-    request_id: usage.status === "success" ? usage.requestId : null,
-    status: usage.status,
-    error_code: usage.errorCode ?? null,
-    latency_ms: usage.latencyMs ?? null,
-    metadata: usage.metadata,
-  });
-  if (error && !error.message.includes("duplicate")) {
-    console.error("[/api/ai/review] usage event insert failed:", error.message);
   }
 }
 
@@ -257,30 +194,4 @@ function usageMetadata(body: ReviewRequestBody): Record<string, unknown> {
     has_context: Boolean(body.input?.context?.conversation_excerpt),
     has_memory: Boolean(body.input?.memory?.persona_md || body.input?.memory?.relationship_md),
   };
-}
-
-function currentMonthStartUTC(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-}
-
-function nextMonthStartUTC(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-}
-
-function errorResponse(
-  status: number,
-  code: string,
-  message: string,
-  requestId: string | null,
-  details?: Record<string, unknown>,
-): Response {
-  return Response.json(
-    {
-      error: { code, message, ...(details ? { details } : {}) },
-      request_id: requestId,
-    },
-    { status },
-  );
 }

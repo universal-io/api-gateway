@@ -10,6 +10,7 @@ export type ServerEnv = {
   anthropicApiKey: string | null;
   defaultModelVendor: string;
   defaultModelId: string;
+  visionModelId: string;
   freeMonthlyReviewLimit: number;
 };
 
@@ -39,6 +40,8 @@ export function getServerEnv(): ServerEnv {
       normalize(process.env.BOMB_SQUAD_DEFAULT_MODEL_VENDOR) ?? "groq",
     defaultModelId:
       normalize(process.env.BOMB_SQUAD_DEFAULT_MODEL_ID) ?? "openai/gpt-oss-120b",
+    // Matches the macOS default (AppSettings.defaultVisionModelID).
+    visionModelId: normalize(process.env.BOMB_SQUAD_VISION_MODEL_ID) ?? "gpt-5.4-mini",
     freeMonthlyReviewLimit: parsePositiveInt(
       process.env.BOMB_SQUAD_FREE_MONTHLY_REVIEW_LIMIT,
       50,
