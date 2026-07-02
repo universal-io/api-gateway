@@ -60,7 +60,14 @@ const VENDOR_ENDPOINTS: Record<string, string> = {
   openai: "https://api.openai.com/v1/chat/completions",
 };
 
-export async function runReview(input: EngineInput): Promise<ReviewEngineOutput> {
+/** Resolves vendor/model/endpoint and builds the provider request body. */
+function prepareCall(input: EngineInput): {
+  vendor: string;
+  modelId: string;
+  endpoint: string;
+  apiKey: string;
+  body: Record<string, unknown>;
+} {
   const env = getServerEnv();
 
   // Model preference is advisory (docs/api-contract.md); only vendors the
@@ -98,6 +105,12 @@ export async function runReview(input: EngineInput): Promise<ReviewEngineOutput>
   if (vendor === "groq" && modelId.includes("gpt-oss")) {
     body.reasoning_effort = "medium";
   }
+
+  return { vendor, modelId, endpoint, apiKey, body };
+}
+
+export async function runReview(input: EngineInput): Promise<ReviewEngineOutput> {
+  const { vendor, modelId, endpoint, apiKey, body } = prepareCall(input);
 
   let response = await callProvider(endpoint, apiKey, body);
 
@@ -143,6 +156,163 @@ export async function runReview(input: EngineInput): Promise<ReviewEngineOutput>
     inputTokens: root.usage?.prompt_tokens ?? 0,
     outputTokens: root.usage?.completion_tokens ?? 0,
   };
+}
+
+export type ReviewStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "final"; output: ReviewEngineOutput };
+
+/**
+ * Streaming variant of `runReview`. Yields `delta` events carrying increments
+ * of `revised_text` as the model produces them (the JSON instruction puts
+ * `revised_text` first so the deliverable streams immediately), then a single
+ * `final` event with the fully parsed result and token usage.
+ */
+export async function* runReviewStream(
+  input: EngineInput,
+): AsyncGenerator<ReviewStreamEvent> {
+  const { vendor, modelId, endpoint, apiKey, body } = prepareCall(input);
+  body.stream = true;
+  // OpenAI-compatible: ask for a usage block on the last chunk.
+  body.stream_options = { include_usage: true };
+
+  let response = await callProvider(endpoint, apiKey, body);
+
+  // Same single retry on upstream rate limits as the non-streaming path;
+  // safe because nothing has been streamed yet.
+  if (response.status === 429) {
+    const detail = await response.text();
+    const waitMs = suggestedWaitMs(response, detail);
+    await sleep(Math.min(waitMs, 6500));
+    response = await callProvider(endpoint, apiKey, body);
+    if (response.status === 429) {
+      throw new ProviderCallError(
+        "AI エンジンが混雑しています。数秒おいてから再試行してください。",
+        { rateLimited: true },
+      );
+    }
+  }
+
+  if (!response.ok || !response.body) {
+    const detail = (await response.text()).slice(0, 500);
+    throw new ProviderCallError(`Provider HTTP ${response.status}: ${detail}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const extractor = new RevisedTextExtractor();
+  let rawContent = "";
+  let sseBuffer = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sseBuffer += decoder.decode(value, { stream: true });
+
+      // Provider SSE: lines of `data: {json}` separated by newlines.
+      const lines = sseBuffer.split("\n");
+      sseBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === "[DONE]") continue;
+
+        let chunk: {
+          choices?: Array<{ delta?: { content?: string } }>;
+          usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+          x_groq?: { usage?: { prompt_tokens?: number; completion_tokens?: number } };
+        };
+        try {
+          chunk = JSON.parse(payload);
+        } catch {
+          continue;
+        }
+
+        const usage = chunk.usage ?? chunk.x_groq?.usage;
+        if (usage) {
+          inputTokens = usage.prompt_tokens ?? inputTokens;
+          outputTokens = usage.completion_tokens ?? outputTokens;
+        }
+
+        const content = chunk.choices?.[0]?.delta?.content;
+        if (typeof content === "string" && content.length > 0) {
+          rawContent += content;
+          const delta = extractor.push(rawContent);
+          if (delta) {
+            yield { type: "delta", text: delta };
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const result = parseResult(rawContent);
+  yield {
+    type: "final",
+    output: {
+      result,
+      modelVendor: vendor,
+      modelId,
+      inputTokens,
+      outputTokens,
+    },
+  };
+}
+
+/**
+ * Incrementally decodes the value of the `"revised_text"` field out of a
+ * growing JSON document. `push` takes the full accumulated raw content and
+ * returns only the newly decoded characters since the previous call.
+ */
+class RevisedTextExtractor {
+  private emitted = 0;
+
+  push(rawContent: string): string {
+    const decoded = RevisedTextExtractor.decodeSoFar(rawContent);
+    if (decoded.length <= this.emitted) return "";
+    const delta = decoded.slice(this.emitted);
+    this.emitted = decoded.length;
+    return delta;
+  }
+
+  private static decodeSoFar(rawContent: string): string {
+    const keyMatch = /"revised_text"\s*:\s*"/.exec(rawContent);
+    if (!keyMatch) return "";
+    let index = keyMatch.index + keyMatch[0].length;
+    let decoded = "";
+    while (index < rawContent.length) {
+      const char = rawContent[index];
+      if (char === '"') break; // closing quote — value complete
+      if (char !== "\\") {
+        decoded += char;
+        index += 1;
+        continue;
+      }
+      // Escape sequence; stop if it is still incomplete at the buffer end.
+      const next = rawContent[index + 1];
+      if (next === undefined) break;
+      if (next === "u") {
+        const hex = rawContent.slice(index + 2, index + 6);
+        if (hex.length < 4) break;
+        const code = Number.parseInt(hex, 16);
+        decoded += Number.isNaN(code) ? "" : String.fromCharCode(code);
+        index += 6;
+        continue;
+      }
+      const simple: Record<string, string> = {
+        '"': '"', "\\": "\\", "/": "/", n: "\n", t: "\t", r: "\r", b: "\b", f: "\f",
+      };
+      decoded += simple[next] ?? next;
+      index += 2;
+    }
+    return decoded;
+  }
 }
 
 function callProvider(

@@ -16,6 +16,8 @@ import {
 import {
   ProviderCallError,
   runReview,
+  runReviewStream,
+  type ReviewEngineOutput,
   type ReviewResultPayload,
 } from "@/lib/server/review-engine";
 import type {
@@ -29,6 +31,9 @@ type ReviewRequestBody = {
   request_id?: string;
   operation?: string;
   mode?: string;
+  /** When true, the response is SSE: `delta` events with revised_text
+   * increments, then one `result` event with the full JSON envelope. */
+  stream?: boolean;
   input?: {
     draft?: string;
     context?: SituationalContextPayload;
@@ -116,19 +121,36 @@ export async function POST(request: Request): Promise<Response> {
       return errorResponse(429, "QUOTA_EXCEEDED", "Monthly review limit reached.", requestId, quota(used));
     }
 
+    const engineInput = {
+      mode: mode as ReviewMode,
+      draft,
+      language: language as OutputLanguageCode,
+      context: body.input?.context,
+      memory: body.input?.memory,
+      preferredVendor: body.preferences?.model_preference?.vendor,
+      preferredModelId: body.preferences?.model_preference?.model_id,
+    };
+
+    // --- Streaming path (SSE) ---
+    if (body.stream === true) {
+      return streamingResponse({
+        requestId,
+        tenantId,
+        userId,
+        mode,
+        language,
+        engineInput,
+        metadata: usageMetadata(body),
+        quota,
+        usedBefore: used,
+      });
+    }
+
     // --- Provider call ---
     const started = Date.now();
     let engineOutput;
     try {
-      engineOutput = await runReview({
-        mode: mode as ReviewMode,
-        draft,
-        language: language as OutputLanguageCode,
-        context: body.input?.context,
-        memory: body.input?.memory,
-        preferredVendor: body.preferences?.model_preference?.vendor,
-        preferredModelId: body.preferences?.model_preference?.model_id,
-      });
+      engineOutput = await runReview(engineInput);
     } catch (error) {
       // User-facing message: pass the rate-limit guidance through, keep raw
       // upstream details in the server log only.
@@ -183,6 +205,108 @@ export async function POST(request: Request): Promise<Response> {
     console.error("[/api/ai/review] internal error:", error);
     return errorResponse(500, "INTERNAL_ERROR", "Unclassified server failure.", requestId);
   }
+}
+
+type StreamingResponseInput = {
+  requestId: string;
+  tenantId: string;
+  userId: string;
+  mode: string;
+  language: string;
+  engineInput: Parameters<typeof runReviewStream>[0];
+  metadata: Record<string, unknown>;
+  quota: (usedNow: number) => QuotaInfo;
+  usedBefore: number;
+};
+
+/**
+ * SSE envelope over the streaming engine. Events:
+ * - `delta`:  {"text": "..."} — increments of revised_text
+ * - `result`: the same JSON as the non-streaming success response
+ * - `error`:  the same JSON as the error contract
+ * Usage is recorded exactly once, after the provider stream ends.
+ */
+function streamingResponse(input: StreamingResponseInput): Response {
+  const encoder = new TextEncoder();
+  const started = Date.now();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(
+          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+        );
+      };
+      try {
+        let finalOutput: ReviewEngineOutput | null = null;
+        for await (const event of runReviewStream(input.engineInput)) {
+          if (event.type === "delta") {
+            send("delta", { text: event.text });
+          } else {
+            finalOutput = event.output;
+          }
+        }
+        if (!finalOutput) {
+          throw new ProviderCallError("Provider stream ended without a result.");
+        }
+        const latencyMs = Date.now() - started;
+        await recordUsage(input.tenantId, input.userId, {
+          operation: "review",
+          unitType: "review",
+          requestId: input.requestId,
+          status: "success",
+          modelVendor: finalOutput.modelVendor,
+          modelId: finalOutput.modelId,
+          inputUnits: finalOutput.inputTokens,
+          outputUnits: finalOutput.outputTokens,
+          latencyMs,
+          metadata: input.metadata,
+        });
+        send("result", {
+          request_id: input.requestId,
+          result: finalOutput.result,
+          meta: {
+            mode: input.mode,
+            output_language: input.language,
+            model_vendor: finalOutput.modelVendor,
+            model_id: finalOutput.modelId,
+            latency_ms: latencyMs,
+          },
+          quota: input.quota(input.usedBefore + 1),
+        });
+      } catch (error) {
+        const rateLimited = error instanceof ProviderCallError && error.rateLimited;
+        const message = rateLimited
+          ? (error as ProviderCallError).message
+          : "AI エンジン側で一時的なエラーが発生しました。少し待ってから再試行してください。";
+        const detail = error instanceof ProviderCallError ? error.message : String(error);
+        console.error(`[/api/ai/review] stream provider error (request ${input.requestId}):`, detail);
+        await recordUsage(input.tenantId, input.userId, {
+          operation: "review",
+          unitType: "review",
+          requestId: input.requestId,
+          status: "error",
+          errorCode: "PROVIDER_ERROR",
+          latencyMs: Date.now() - started,
+          metadata: input.metadata,
+        });
+        send("error", {
+          error: { code: "PROVIDER_ERROR", message },
+          request_id: input.requestId,
+        });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+    },
+  });
 }
 
 function usageMetadata(body: ReviewRequestBody): Record<string, unknown> {

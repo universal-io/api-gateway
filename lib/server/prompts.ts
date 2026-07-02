@@ -218,13 +218,15 @@ export function userContent(
   return parts.join("\n\n");
 }
 
-/** Inline schema description for json_object mode (Groq). */
-export const JSON_INSTRUCTION = `出力は次の構造のJSONオブジェクト1つだけで返してください（コードブロックや前後の説明文を付けない）:
+/** Inline schema description for json_object mode (Groq).
+ * `revised_text` comes first on purpose: when streaming, the deliverable
+ * starts flowing to the client before the issue list is generated. */
+export const JSON_INSTRUCTION = `出力は次の構造のJSONオブジェクト1つだけで返してください（コードブロックや前後の説明文を付けない）。キーは必ずこの順序で出力すること:
 {
+  "revised_text": "そのまま送れる修正後の全文",
   "issues": [
     {"category": "typo|impoliteness|unclear", "severity": "low|medium|high",
      "excerpt": "原文の該当箇所", "explanation": "なぜ問題か", "suggestion": "どう直すか"}
   ],
-  "revised_text": "そのまま送れる修正後の全文",
   "summary": "一言サマリ"
 }`;
