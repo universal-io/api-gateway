@@ -25,12 +25,37 @@ export type VisionTurn = {
   text: string;
 };
 
+/**
+ * A place on the screen, in the image's own normalized space: origin top-left,
+ * every value a fraction of width or height. Normalized rather than pixels so a
+ * client that scaled the capture before sending it does not have to undo a
+ * scale factor the model never knew about.
+ */
+export type VisionBox = { x: number; y: number; w: number; h: number };
+
+export type VisionAnnotation = {
+  id: string;
+  kind: "highlight" | "callout";
+  box: VisionBox;
+  label: string;
+};
+
 export type VisionResult = {
   mode: "observation" | "answer" | "guide" | "clarification";
   message: string;
   observations: string[];
   uncertainties: string[];
   targetCandidateId: string | null;
+  /**
+   * Where to draw, for clients that have no other way to point.
+   *
+   * macOS resolves `targetCandidateId` against the accessibility tree it
+   * collected itself and knows the real frame, which is measured rather than
+   * estimated and therefore always better. A browser has no such tree: without
+   * these boxes a web client can say "press the blue button" and has no means
+   * of showing which one. Empty for clients that did not ask.
+   */
+  annotations: VisionAnnotation[];
 };
 
 export type VisionCandidate = {
@@ -53,7 +78,20 @@ export type VisionEngineInput = {
   /** Identity of the product on screen, used only to pick a skill. */
   context?: AppSignals;
   language: "japanese" | "english";
+  /** Where the user pointed, in normalized image coordinates. */
+  pointer?: VisionPointer;
+  /**
+   * Whether the client can draw boxes on the capture and therefore wants
+   * coordinates. Off unless asked, so the shipped macOS and iOS clients get
+   * the same schema, the same prompt, and the same answers as before.
+   */
+  wantsAnnotations?: boolean;
 };
+
+/** What the user pointed at, as sent by a client with no accessibility tree. */
+export type VisionPointer =
+  | { kind: "point"; point: { x: number; y: number } }
+  | { kind: "region"; region: VisionBox };
 
 /** One provider call's outcome, before it is dressed as a `VisionEngineOutput`. */
 type VisionModelCall = {
@@ -415,7 +453,40 @@ function parseVisionResult(
   if (parsed.targetCandidateId !== null && !allowedIDs.has(parsed.targetCandidateId)) {
     throw new ProviderCallError(`${target.vendor}/${target.modelId} selected an unknown candidate ID.`);
   }
-  return parsed;
+  return { ...parsed, annotations: clampAnnotations(parsed.annotations) };
+}
+
+/**
+ * Brings every box inside the image.
+ *
+ * A model that overshoots an edge by a few percent has still identified the
+ * right control, and dropping the annotation would lose a correct answer over
+ * arithmetic. Nothing here can rescue a box in the wrong place — that is a
+ * measurement problem, and the reason macOS resolves candidate IDs instead.
+ */
+function clampAnnotations(
+  annotations: VisionAnnotation[] | undefined,
+): VisionAnnotation[] {
+  // Undefined is the ordinary case, not a fault: a client that did not ask for
+  // coordinates got a schema without them. Every caller downstream reads this
+  // as a list, so it becomes an empty one here rather than at each use.
+  return (annotations ?? []).map((annotation) => {
+    const x = clampUnit(annotation.box.x);
+    const y = clampUnit(annotation.box.y);
+    return {
+      ...annotation,
+      box: {
+        x,
+        y,
+        w: Math.min(Math.max(annotation.box.w, 0), 1 - x),
+        h: Math.min(Math.max(annotation.box.h, 0), 1 - y),
+      },
+    };
+  });
+}
+
+function clampUnit(value: number): number {
+  return Math.min(Math.max(value, 0), 1);
 }
 
 /** Shared across both wire formats: what the model is, regardless of transport. */
@@ -445,6 +516,65 @@ const VISION_RESULT_SCHEMA_BASE = {
   required: ["mode", "message", "observations", "uncertainties", "targetCandidateId"],
 } as const;
 
+const NORMALIZED_BOX_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  description:
+    "Rectangle in the image's own coordinates. Origin is the top-left of the image and all four values are fractions between 0 and 1.",
+  properties: {
+    x: { type: "number", description: "Left edge as a fraction of image width." },
+    y: { type: "number", description: "Top edge as a fraction of image height." },
+    w: { type: "number", description: "Width as a fraction of image width." },
+    h: { type: "number", description: "Height as a fraction of image height." },
+  },
+  required: ["x", "y", "w", "h"],
+} as const;
+
+const ANNOTATIONS_SCHEMA = {
+  type: "array",
+  description:
+    "Places on this screenshot to draw attention to. Empty when the answer points at nothing.",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      id: { type: "string", description: "Unique within this response." },
+      kind: {
+        type: "string",
+        enum: ["highlight", "callout"],
+        description:
+          "highlight draws a box around a target; callout attaches a note to a region.",
+      },
+      box: NORMALIZED_BOX_SCHEMA,
+      label: {
+        type: "string",
+        description: "Short text drawn next to the box. A few words at most.",
+      },
+    },
+    required: ["id", "kind", "box", "label"],
+  },
+} as const;
+
+/**
+ * The schema sent to the provider. Adding `annotations` only when a client
+ * asked keeps the request for the shipped clients byte-identical: a model told
+ * to produce coordinates will produce them, and macOS — which measures frames
+ * through the accessibility tree — would be paying tokens for a guess it has
+ * no use for.
+ */
+function visionResultSchema(wantsAnnotations: boolean): Record<string, unknown> {
+  const properties: Record<string, unknown> = {
+    ...VISION_RESULT_SCHEMA_BASE.properties,
+    targetCandidateId: { type: ["string", "null"] },
+  };
+  const required: string[] = [...VISION_RESULT_SCHEMA_BASE.required];
+  if (wantsAnnotations) {
+    properties.annotations = ANNOTATIONS_SCHEMA;
+    required.push("annotations");
+  }
+  return { ...VISION_RESULT_SCHEMA_BASE, properties, required };
+}
+
 function responsesRequestBody(
   input: VisionEngineInput,
   skill: ActiveSkill | null,
@@ -463,13 +593,7 @@ function responsesRequestBody(
         type: "json_schema",
         name: "vision_result",
         strict: true,
-        schema: {
-          ...VISION_RESULT_SCHEMA_BASE,
-          properties: {
-            ...VISION_RESULT_SCHEMA_BASE.properties,
-            targetCandidateId: { type: ["string", "null"] },
-          },
-        },
+        schema: visionResultSchema(input.wantsAnnotations === true),
       },
     },
     input: [
@@ -524,9 +648,10 @@ function chatCompletionsRequestBody(
         name: "vision_result",
         strict: true,
         schema: {
-          ...VISION_RESULT_SCHEMA_BASE,
+          ...visionResultSchema(input.wantsAnnotations === true),
           properties: {
-            ...VISION_RESULT_SCHEMA_BASE.properties,
+            ...(visionResultSchema(input.wantsAnnotations === true)
+              .properties as Record<string, unknown>),
             targetCandidateId: { anyOf: [{ type: "string" }, { type: "null" }] },
           },
         },
@@ -587,5 +712,28 @@ function isVisionResult(value: unknown): value is VisionResult {
     && candidate.uncertainties.every((item) => typeof item === "string")
     && (candidate.targetCandidateId === null
       || typeof candidate.targetCandidateId === "string")
+    // Absent is valid: a client that did not ask for coordinates gets a schema
+    // without them, and the model is right not to send any.
+    && (candidate.annotations === undefined || isVisionAnnotationArray(candidate.annotations))
   );
+}
+
+function isVisionAnnotationArray(value: unknown): value is VisionAnnotation[] {
+  return Array.isArray(value) && value.every((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
+    const annotation = item as Record<string, unknown>;
+    const box = annotation.box as Record<string, unknown> | undefined;
+    return (
+      typeof annotation.id === "string"
+      && (annotation.kind === "highlight" || annotation.kind === "callout")
+      && typeof annotation.label === "string"
+      && typeof box === "object"
+      && box !== null
+      // Non-finite values would survive clamping as NaN and reach the client as
+      // a box it cannot draw, so they are rejected here rather than rendered.
+      && (["x", "y", "w", "h"] as const).every(
+        (key) => typeof box[key] === "number" && Number.isFinite(box[key]),
+      )
+    );
+  });
 }

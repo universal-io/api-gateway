@@ -30,6 +30,12 @@ buildと、通常requestから`selection`だけが増えるmacOS request比較�
 ## 共通
 
 - Base URL: `https://api.universal-io.com/api`
+- **CORS**: `/api/*` はブラウザからの呼び出しを受け付ける（`proxy.ts` が正本）。
+  許可originは閉じたリストで、`app.universal-io.com`・`universal-io.com`系・
+  localhost開発ポート・app-webのVercelプレビュー（`app-web-*.vercel.app`）のみ。
+  `Authorization`にSupabaseセッションが載るため、ワイルドカードは使わない。
+  プリフライト（OPTIONS）は route handler へ届く前に proxy が204で返す。
+  Originヘッダを持たないネイティブクライアントの応答は一切変更しない。
 - 認証: `Authorization: Bearer <Supabase access token>`
 - Content-Type: `application/json`（transcribeのみmultipart）
 - macOSクライアントにローカルGateway、BYOK、別endpointへのfallbackはない。
@@ -136,6 +142,19 @@ POST成功応答の`meta.timing_ms`と`Server-Timing`は
   表現できるが、現行macOSクライアントが実際に収集しているのはAX候補だけであり、ブラウザDOMを
   取得する統合は存在しない
 - `input.guidance`: Copilot進捗時の目的と直前案内。`question`とは排他
+- `input.pointer`: 任意。**AXを持たないクライアント（web）が「指した場所」を送る**。
+  `{"kind":"point","point":{"x":0.5,"y":0.25}}` または
+  `{"kind":"region","region":{"x":0.1,"y":0.1,"w":0.3,"h":0.2}}`。座標は画像自身の
+  正規化座標（左上原点、0〜1）で、pixelでもAXグローバル座標でもない。`region`は面積が
+  0より大きく、画像の外へはみ出さないこと。`point`と`region`は排他。
+  **旧`focus_target.region`が「受理した上で無視」される（R10.5）のとは根拠が異なる。**
+  あちらはAXが返した選択状態で選択意図の証拠にならなかったが、`pointer`はユーザーが
+  実際に行った指差し操作そのものなので、回答スコープを決める信頼された意図として扱う。
+  質問と併用できる（質問が意図、pointerが探す場所を絞る）。
+- `input.wants_annotations`: 任意boolean（既定false）。**trueのとき応答に
+  `result.annotations` が付く**。macOS/iOSはAXで実測フレームを持つため送らない。
+  falseの場合、providerへ送るschemaもpromptも**従来と完全に同一**で、
+  公開済みクライアントの挙動は1バイトも変わらない。
 - `input.selection`: 任意。現行R10 macOSクライアントが通常Visionへ加えるSelection Extension。
   詳細schemaと不変条件は次節を正とする。
 - `input.focus_target`: 公開済み`v0.2.1`向けの後方互換入力。Focused Visionのセッション内対象。
@@ -166,6 +185,12 @@ POST成功応答の`meta.timing_ms`と`Server-Timing`は
 | `reset` | `{}` | ここまでの`delta`を破棄する。一次モデルが回答途中で落ち、二次モデルが別の回答を最初から書き直す |
 | `result` | 非ストリーミング成功応答と同一のJSON | 検証済みの結果。**これが唯一の判断材料** |
 | `error` | エラー契約と同一のJSON | 一次・二次とも失敗 |
+
+`result.annotations`は`input.wants_annotations: true`のときだけ中身を持ち、それ以外は常に`[]`。
+各要素は`{"id","kind":"highlight"|"callout","box":{"x","y","w","h"},"label"}`で、boxは
+**画像自身の正規化座標（左上原点、0〜1）**。Gatewayが画像内へclampするので、
+クライアントは画像外のboxを受け取らない。**AXを持つクライアントは`target_candidate_id`を
+使うこと** — あちらは実測フレーム、こちらはモデルの目測であり、精度が構造的に違う。
 
 `mode`、`target_candidate_id`、`uncertainties`は必ず`result`から読む。`delta`から推測しない
 （ストリーミングが検証を緩めてはならない）。`result`が来ないまま終わったストリームは失敗である。
@@ -280,6 +305,7 @@ validation後は新fieldと同じ内部型・同じpromptへ合流する。内�
     "observations": [],
     "uncertainties": [],
     "target_candidate_id": null,
+    "annotations": [],
     "skill": { "id": "gmail", "name": "Gmail" }
   },
   "meta": {

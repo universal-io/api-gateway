@@ -24,6 +24,7 @@ import {
   VISION_REASONING_EFFORT,
   type VisionCandidate,
   type VisionEngineOutput,
+  type VisionPointer,
   type VisionTurn,
 } from "@/lib/server/vision-engine";
 import {
@@ -101,6 +102,21 @@ type VisionRequestBody = {
     };
     visual_selection_hint?: boolean;
     selection?: VisionSelectionWire;
+    /**
+     * Where the user pointed, in normalized image coordinates. This is what a
+     * client with no accessibility tree has instead of `selection`: a tap or a
+     * ring drawn on the capture. Unlike the retired `focus_target.region`,
+     * which reported what the accessibility API happened to have selected,
+     * this is a gesture the user actually made — so it is evidence of intent
+     * and is acted on rather than ignored.
+     */
+    pointer?: {
+      kind?: string;
+      point?: { x?: number; y?: number };
+      region?: { x?: number; y?: number; w?: number; h?: number };
+    };
+    /** Client can draw on the capture and wants coordinates back. */
+    wants_annotations?: boolean;
     candidates?: Array<{
       id?: string;
       source?: string;
@@ -237,6 +253,10 @@ export async function POST(request: Request): Promise<Response> {
       selection_present: Boolean(selection),
       selection_acquisition_completeness: selection?.acquisitionCompleteness,
       selection_wire_kind: selectionWireKindForUsage(body.input!),
+      // The kind only. Where on their own screen somebody pointed is not
+      // operational information, and this table is what usage keeps.
+      pointer_kind: body.input!.pointer?.kind ?? null,
+      wants_annotations: body.input!.wants_annotations === true,
       api: "responses",
       image_detail: VISION_IMAGE_DETAIL,
       reasoning_effort: VISION_REASONING_EFFORT,
@@ -251,6 +271,8 @@ export async function POST(request: Request): Promise<Response> {
       selection,
       context,
       language,
+      pointer: pointerFromWire(body.input!.pointer),
+      wantsAnnotations: body.input!.wants_annotations === true,
     };
 
     // --- Streaming path (SSE) ---
@@ -527,6 +549,7 @@ function visionSuccessBody(input: {
       observations: output.result.observations,
       uncertainties: output.result.uncertainties,
       target_candidate_id: output.result.targetCandidateId,
+      annotations: output.result.annotations,
       skill: output.skill,
     },
     meta: {
@@ -671,6 +694,21 @@ function validateBody(
       400,
       "BAD_REQUEST",
       "input.selection cannot be combined with legacy selection fields.",
+      requestId,
+    );
+  }
+  const pointer = body.input?.pointer;
+  if (pointer !== undefined && !isValidPointer(pointer)) {
+    return errorResponse(400, "BAD_REQUEST", "input.pointer is invalid.", requestId);
+  }
+  if (
+    body.input?.wants_annotations !== undefined
+    && typeof body.input.wants_annotations !== "boolean"
+  ) {
+    return errorResponse(
+      400,
+      "BAD_REQUEST",
+      "input.wants_annotations is invalid.",
       requestId,
     );
   }
@@ -880,5 +918,63 @@ function candidateDiagnosticsForUsage(
     capture_scope: diagnostics.capture_scope,
     collection_passes: diagnostics.collection_passes,
     web_area_present: diagnostics.web_area_present,
+  };
+}
+
+/** A coordinate the client says is a fraction of the image. */
+function isUnitValue(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function isValidPointer(
+  pointer: NonNullable<NonNullable<VisionRequestBody["input"]>["pointer"]>,
+): boolean {
+  if (typeof pointer !== "object" || pointer === null || Array.isArray(pointer)) {
+    return false;
+  }
+  if (pointer.kind === "point") {
+    // Exactly one shape per kind: a body carrying both would leave the scope of
+    // the answer to whichever field the reader happens to look at first.
+    if (pointer.region !== undefined) return false;
+    const point = pointer.point;
+    return (
+      typeof point === "object" && point !== null && !Array.isArray(point)
+      && isUnitValue(point.x) && isUnitValue(point.y)
+    );
+  }
+  if (pointer.kind === "region") {
+    if (pointer.point !== undefined) return false;
+    const region = pointer.region;
+    if (
+      typeof region !== "object" || region === null || Array.isArray(region)
+      || !isUnitValue(region.x) || !isUnitValue(region.y)
+      || !isUnitValue(region.w) || !isUnitValue(region.h)
+    ) {
+      return false;
+    }
+    // A zero-area ring is a stray click that dragged nowhere, and one running
+    // past the edge was measured against something other than this image.
+    // Neither describes a place on the screen, so neither is accepted.
+    return region.w > 0 && region.h > 0
+      && region.x + region.w <= 1 && region.y + region.h <= 1;
+  }
+  return false;
+}
+
+function pointerFromWire(
+  pointer: NonNullable<VisionRequestBody["input"]>["pointer"],
+): VisionPointer | undefined {
+  if (!pointer) return undefined;
+  if (pointer.kind === "point") {
+    return { kind: "point", point: { x: pointer.point!.x!, y: pointer.point!.y! } };
+  }
+  return {
+    kind: "region",
+    region: {
+      x: pointer.region!.x!,
+      y: pointer.region!.y!,
+      w: pointer.region!.w!,
+      h: pointer.region!.h!,
+    },
   };
 }
