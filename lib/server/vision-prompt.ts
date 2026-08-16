@@ -36,10 +36,21 @@ export function buildVisionPromptText(input: VisionPromptInput): string {
   // It goes above the screen evidence for the same reason selected text does.
   if (input.pointer) {
     blocks.push(
-      "Where the user pointed on this screenshot (trusted intent, in the image's own coordinates where 0,0 is the top-left corner and 1,1 the bottom-right):\n"
+      "Where the user pointed on this screenshot (trusted intent):\n"
+      // The mark comes first because it is what actually works. Locating a
+      // position from two fractions is arithmetic these models get wrong often
+      // enough to answer about a different part of the screen entirely, while
+      // finding a bright ring in a picture is what they are good at. The
+      // numbers stay as a cross-check for a client that could not draw.
+      + "A magenta mark with a white outline has been drawn onto the image at the place the user indicated"
+      + (input.pointer.kind === "point"
+        ? " — a ring with a crosshair at its centre. Find that mark and answer about the control it sits on."
+        : " — a rectangle around the area. Find that rectangle and answer about what is inside it.")
+      + " The mark is not part of the screen being examined; it is the user's own gesture, so never describe or mention it."
+      + "\nIf you can see the mark, trust it over the coordinates below. The coordinates are a fallback for when no mark was drawn, in the image's own space where 0,0 is the top-left corner and 1,1 the bottom-right:\n"
       + JSON.stringify(input.pointer)
       + (input.pointer.kind === "point"
-        ? "\nThe user tapped this spot. Identify the single control or element under it and make that the subject of your answer. If the exact spot is empty, use the nearest meaningful element rather than describing the whole screen."
+        ? "\nThe user tapped this spot. Identify the single control or element there and make that the subject of your answer. If the exact spot is empty, use the nearest meaningful element rather than describing the whole screen."
         : "\nThe user drew a ring around this area. Everything inside it is the subject, which is how somebody asks about a group of things they have no name for. Answer about that area as a whole rather than picking one element out of it."),
     );
   }
