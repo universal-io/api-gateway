@@ -25,10 +25,6 @@ const ALLOWED_ORIGINS = new Set([
   // time app-web was started, and it served another project's page instead.
   "http://localhost:7380",
   "http://127.0.0.1:7380",
-  // The production alias of the app-web Vercel project. The project is named
-  // for the product family rather than just "app-web", because the account
-  // hosts many unrelated services and a bare name says nothing about which.
-  "https://universal-io-app-web.vercel.app",
 ]);
 
 /**
