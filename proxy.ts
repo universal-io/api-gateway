@@ -18,12 +18,13 @@ const ALLOWED_ORIGINS = new Set([
   "https://app.universal-io.com",
   "https://universal-io.com",
   "https://www.universal-io.com",
-  // Local development of app-web. Ports differ because the Gateway itself
-  // takes 3000 when both run on one machine.
-  "http://localhost:3000",
-  "http://localhost:3001",
-  "http://127.0.0.1:3000",
-  "http://127.0.0.1:3001",
+  // Local development of app-web, on a port reserved for this product family.
+  // The 3000-3010 range is the default for most of the JavaScript ecosystem,
+  // so anything living there is one `npm run dev` in an unrelated project away
+  // from being silently shadowed — which is exactly what happened the first
+  // time app-web was started, and it served another project's page instead.
+  "http://localhost:7380",
+  "http://127.0.0.1:7380",
 ]);
 
 /**
