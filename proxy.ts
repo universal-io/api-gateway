@@ -25,11 +25,10 @@ const ALLOWED_ORIGINS = new Set([
   // time app-web was started, and it served another project's page instead.
   "http://localhost:7380",
   "http://127.0.0.1:7380",
-  // The production alias Vercel gives the app-web project. It is listed exactly
-  // rather than folded into the pattern below, which requires a hyphen after
-  // "app-web" and so would not match this host — and widening a security
-  // boundary to fit one known name is the wrong trade.
-  "https://app-web.vercel.app",
+  // The production alias of the app-web Vercel project. The project is named
+  // for the product family rather than just "app-web", because the account
+  // hosts many unrelated services and a bare name says nothing about which.
+  "https://universal-io-app-web.vercel.app",
 ]);
 
 /**
@@ -38,7 +37,7 @@ const ALLOWED_ORIGINS = new Set([
  * that only Vercel-issued hosts for this project can match, and an origin like
  * `https://app-web-evil.com` cannot.
  */
-const PREVIEW_ORIGIN = /^https:\/\/app-web-[a-z0-9-]+\.vercel\.app$/;
+const PREVIEW_ORIGIN = /^https:\/\/universal-io-app-web-[a-z0-9-]+\.vercel\.app$/;
 
 function isAllowedOrigin(origin: string): boolean {
   return ALLOWED_ORIGINS.has(origin) || PREVIEW_ORIGIN.test(origin);
