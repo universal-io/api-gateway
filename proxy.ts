@@ -25,6 +25,11 @@ const ALLOWED_ORIGINS = new Set([
   // time app-web was started, and it served another project's page instead.
   "http://localhost:7380",
   "http://127.0.0.1:7380",
+  // The production alias Vercel gives the app-web project. It is listed exactly
+  // rather than folded into the pattern below, which requires a hyphen after
+  // "app-web" and so would not match this host — and widening a security
+  // boundary to fit one known name is the wrong trade.
+  "https://app-web.vercel.app",
 ]);
 
 /**
