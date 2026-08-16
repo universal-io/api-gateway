@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# The template carries key names only and must be in the repo: without it a
+# fresh clone has no record of which variables the code requires. It was
+# swallowed by the rule above for the whole time this lived in app-mac/web.
+!.env.example
 
 # vercel
 .vercel
