@@ -7,6 +7,8 @@ export type VisionPromptInput = {
   pointer?: VisionPointer;
   /** Whether to ask for drawable coordinates at all. */
   wantsAnnotations?: boolean;
+  /** Pixel dimensions read from the image bytes, never taken from the client. */
+  imageSize?: { width: number; height: number };
   guidance?: { goal: string; previousInstruction: string };
   selection?: VisionSelection;
   turns: Array<{ role: "user" | "assistant"; text: string }>;
@@ -27,9 +29,25 @@ export type VisionPromptInput = {
 };
 
 export function buildVisionPromptText(input: VisionPromptInput): string {
-  const blocks = [
+  const blocks: string[] = [];
+
+  // Stating the size is load-bearing, not informational. Without it the model
+  // normalizes against a canvas it assumes rather than the one it was given,
+  // and every box lands in the right column and the wrong row while the
+  // explanation stays correct. Measured by app-ios on 2026-08-13: mean vertical
+  // error 0.155 without this sentence, 0.001 with it
+  // (app-ios/docs/lessons-from-app-mac.md §3-b). Only sent when coordinates are
+  // being asked for, so the shipped clients' prompts are unchanged.
+  if (input.wantsAnnotations && input.imageSize) {
+    const { width, height } = input.imageSize;
+    blocks.push(
+      `This image is exactly ${width} pixels wide and ${height} pixels tall. Every coordinate you return must be divided by those two numbers — x and w by ${width}, y and h by ${height} — so that they are fractions of this image and not of any other size.`,
+    );
+  }
+
+  blocks.push(
     `Resolved user intent (the only task for this turn):\n${resolveVisionIntent(input)}`,
-  ];
+  );
 
   // A pointer is the strongest statement of scope available to a client with
   // no accessibility tree: the user physically indicated a place on the image.

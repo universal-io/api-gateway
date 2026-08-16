@@ -86,6 +86,9 @@ export type VisionEngineInput = {
    * the same schema, the same prompt, and the same answers as before.
    */
   wantsAnnotations?: boolean;
+  /** Derived from the image bytes by the route, so it cannot disagree with the
+   * image or be forgotten by a client. */
+  imageSize?: { width: number; height: number };
 };
 
 /** What the user pointed at, as sent by a client with no accessibility tree. */

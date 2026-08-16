@@ -12,6 +12,7 @@ import {
   type UsageInput,
 } from "@/lib/server/gateway";
 import { after } from "next/server";
+import { imageFacts } from "@/lib/server/image-size";
 import {
   aiModelFailureContract,
   AI_MODEL_ROUTES,
@@ -161,6 +162,12 @@ export async function POST(request: Request): Promise<Response> {
     if (validationError) return validationError;
 
     const imageBase64 = body.input!.image_base64!;
+    // Derived from the bytes, never from the caller. A client cannot forget to
+    // send it and cannot send one that disagrees with the image it attached —
+    // and the failure it prevents is silent, producing a confident answer with
+    // every box in the wrong row (app-ios/docs/lessons-from-app-mac.md §3-b/§3-c).
+    const facts = imageFacts(Uint8Array.from(Buffer.from(imageBase64, "base64")));
+
     const mediaType = body.input!.media_type ?? "image/png";
     const captureId = body.input!.capture_id!;
     const question = body.input!.question?.trim();
@@ -257,6 +264,10 @@ export async function POST(request: Request): Promise<Response> {
       // operational information, and this table is what usage keeps.
       pointer_kind: body.input!.pointer?.kind ?? null,
       wants_annotations: body.input!.wants_annotations === true,
+      // Dimensions only. Nothing about what the screen contained.
+      image_width: facts?.size.width ?? null,
+      image_height: facts?.size.height ?? null,
+      image_orientation: facts?.orientation ?? null,
       api: "responses",
       image_detail: VISION_IMAGE_DETAIL,
       reasoning_effort: VISION_REASONING_EFFORT,
@@ -264,6 +275,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const engineInput = {
       imageDataURL: `data:${mediaType};base64,${imageBase64}`,
+      imageSize: facts?.size,
       question,
       turns,
       candidates,
