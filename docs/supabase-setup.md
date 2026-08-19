@@ -1,7 +1,12 @@
 # Supabase Setup Notes
 
-This document covers the Bomb Squad-specific setup inside the existing shared
+This document covers the Universal I/O-specific setup inside the existing shared
 Supabase project.
+
+> **この文書は長らく実態と乖離していた。** 冒頭で「移行完了」と書きながら
+> 別の節では `bombsquad.me` を本番として挙げ、Google Cloud の登録内容も
+> 古いままだった。実際に app-web の設定作業で誤誘導を生んだので、
+> **設定を変えたらこの文書も同時に直すこと。**
 
 Project URL:
 
@@ -127,29 +132,48 @@ Important clarification:
 
 Current web values:
 
-- Production site URL: `https://bombsquad.me`（将来 `https://universal-io.com` へ移行予定。
-  製品サイト・サインイン・課金・Gateway API を集約する。メールは Cloudflare + Resend 予定）
-- Local site URL: `http://localhost:3000`
+- Production site URL: `https://universal-io.com`（移行完了済み。`bombsquad.me` はレガシー）
+- Production Gateway: `https://api.universal-io.com`
+- Local site URL (this repo's own `/auth` page): `http://localhost:3000`
+- Local site URL (app-web): `http://localhost:7380`（**3000 ではない。**
+  3000〜3010 はJSエコシステム全体が取り合う帯で、実際に別プロジェクトに
+  影を踏まれた。詳細は `app-web/README.md`）
 - Shared web auth callback path: `/auth/callback`
 - Supabase provider callback: `https://skcsbcyivjcvevxntvqa.supabase.co/auth/v1/callback`
 - Native macOS callback: `universal-io://auth/callback`（C4 リブランド、2026-07-03。
   旧 `bombsquad://auth/callback` は移行期間中 Redirect URLs に残し、行き渡ったら削除）
 
-Current provider configuration notes:
+### Google Cloud OAuth client
 
-- Google Cloud OAuth client:
-  - Authorized JavaScript origins:
-    - `https://bombsquad.me`
-    - `http://localhost:3000`
-  - Authorized redirect URIs:
-    - `https://skcsbcyivjcvevxntvqa.supabase.co/auth/v1/callback`
-- Supabase Auth URL configuration should include:
-  - Site URL: `https://bombsquad.me`
-  - Redirect URLs:
-    - `https://bombsquad.me/auth/callback`
-    - `http://localhost:3000/auth/callback`
-    - `universal-io://auth/callback`（C4 以降の必須エントリ）
-    - `bombsquad://auth/callback`（旧クライアント向け。移行完了後に削除可）
+**アカウントを間違えると見つからない。** クライアントは
+`whatifepxyz@gmail.com` のプロジェクト `899703844772`（名前 `Supabase Auth Client`）にある。
+他のアカウントでは**プロジェクトの存在すら見えない**（403）ので「無い」と誤認しやすい。
+AGENTS.md の「アカウントと外部サービス」が正本。
+
+- Authorized redirect URIs（これ1つだけでよい。各アプリのURLではない）:
+  - `https://skcsbcyivjcvevxntvqa.supabase.co/auth/v1/callback`
+- Authorized JavaScript origins（サインインを開始するページのオリジン）:
+  - `http://localhost:3000`, `http://127.0.0.1:3000` — このリポジトリの `/auth`
+  - `http://localhost:7380` — app-web ローカル
+  - app-web の Vercel 本番オリジン
+  - `https://universal-io.com`
+  - `https://bombsquad.me` — レガシー。行き渡ったら削除
+
+> **2026-08-20 まで、ここには `bombsquad.me` と `localhost:3000` の2つしか
+> 登録されていなかった。** つまり `universal-io.com` からも app-web からも
+> Googleサインインは通らない状態だった。この節は長らく実態と乖離していたので、
+> 変更したら必ず実際のコンソールと突き合わせること。
+
+### Supabase Auth URL configuration
+
+- Site URL: `https://universal-io.com`
+- Redirect URLs:
+  - `https://universal-io.com/auth/callback`
+  - `http://localhost:3000/auth/callback`
+  - `http://localhost:7380/auth/callback`（app-web）
+  - app-web の Vercel 本番オリジン + `/auth/callback`
+  - `universal-io://auth/callback`（C4 以降の必須エントリ）
+  - `bombsquad://auth/callback`（旧クライアント向け。移行完了後に削除可）
 
 Expected categories:
 
