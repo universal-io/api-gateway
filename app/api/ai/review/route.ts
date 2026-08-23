@@ -6,6 +6,7 @@ import { after } from "next/server";
 import {
   authenticateAIRequest,
   buildQuota,
+  enforceServiceCapacity,
   errorResponse,
   gatewayErrorResponse,
   GatewayError,
@@ -101,6 +102,10 @@ export async function POST(request: Request): Promise<Response> {
       await authenticateAIRequest(request);
 
     // --- Quota ---
+    // This route checks its own tenant limit inline (it needs the count for
+    // the response envelope), so the service-wide ceiling has to be asked for
+    // here too. `enforceQuota` carries it for every other metered route.
+    await enforceServiceCapacity(entitlement);
     const currentQuota = await buildQuota(tenantId, entitlement);
     const { limit, used } = currentQuota;
 

@@ -69,7 +69,14 @@ buildと、通常requestから`selection`だけが増えるmacOS request比較�
 ```
 
 主なcodeは `BAD_REQUEST`、`UNAUTHENTICATED`、`REAUTH_REQUIRED`、`PAYMENT_REQUIRED`、
-`QUOTA_EXCEEDED`、`RATE_LIMITED`、`PROVIDER_ERROR`、`INTERNAL_ERROR`。
+`QUOTA_EXCEEDED`、`SERVICE_CAPACITY_REACHED`、`RATE_LIMITED`、`PROVIDER_ERROR`、
+`INTERNAL_ERROR`。
+
+`QUOTA_EXCEEDED`(429)と`SERVICE_CAPACITY_REACHED`(503)は**別物**なので混ぜない。
+前者は**その人が**自分の月間枠を使い切った状態、後者は**サービス全体が**当月の
+上限（`bs_service_limits`）に達し、freeプランの受付だけを止めている状態を指す。
+有料プランは後者では止まらない。原因を取り違えた文言は、原因を述べないのと
+同じくらい行き先を失わせるので、クライアントは両者に別の文言を持つこと。
 課金は加えて `BILLING_UNAVAILABLE`、`PLAN_NOT_PURCHASABLE`、`SUBSCRIPTION_EXISTS`、
 `NO_BILLING_ACCOUNT` を返す。
 

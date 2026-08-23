@@ -13,6 +13,11 @@ import {
   QuotaStateCache,
   type QuotaState,
 } from "@/lib/server/quota-state-cache";
+import {
+  serviceCapacityExhausted,
+  serviceCeilingApplies,
+  type ServiceCapacity,
+} from "@/lib/server/service-capacity";
 import { createHash } from "node:crypto";
 import { after } from "next/server";
 import {
@@ -66,11 +71,22 @@ export type AuthenticateOptions = {
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_PREFLIGHT_CACHE_ENTRIES = 256;
+/** The service ceiling is one row an operator edits; a short TTL is what makes
+ * a change to it take effect without a deploy. */
+const SERVICE_LIMIT_CACHE_TTL_MS = 60_000;
 const authCache = new Map<string, { value: AuthContext; expiresAt: number }>();
 const quotaStateCache = new QuotaStateCache(
   PREFLIGHT_CACHE_TTL_MS,
   MAX_PREFLIGHT_CACHE_ENTRIES,
 );
+/**
+ * The service-wide count and ceiling. Deliberately not a `QuotaStateCache`:
+ * that one keeps a count and a limit together under one TTL, and these two
+ * want different ones — the count may lag five minutes, the ceiling may not,
+ * or an operator would raise it and watch nothing happen.
+ */
+let serviceUsageCache: { monthKey: string; used: number; expiresAt: number } | null = null;
+let serviceLimitCache: { limit: number | null; expiresAt: number } | null = null;
 
 /**
  * Entitlement statuses that may use the product.
@@ -301,10 +317,12 @@ export async function recordUsage(
     // This instance just wrote the value its next quota check would otherwise
     // fetch again. Advance the known count without extending its TTL.
     quotaStateCache.increment(quotaCacheKey(tenantId));
+    noteServiceUsage();
   } else if (duplicate) {
     // A retry may have been recorded by another instance. Forget local
     // knowledge so the next request reconciles with Postgres.
     quotaStateCache.delete(quotaCacheKey(tenantId));
+    serviceUsageCache = null;
   }
 }
 
@@ -427,7 +445,8 @@ export async function countMonthlyUsage(tenantId: string): Promise<number> {
 }
 
 /**
- * Rejects with QUOTA_EXCEEDED when the tenant's monthly budget is spent.
+ * Rejects with QUOTA_EXCEEDED when the tenant's monthly budget is spent, and
+ * with SERVICE_CAPACITY_REACHED when the product's own ceiling is.
  * Shared by every metered AI route except review, which needs the count
  * for its response envelope and checks inline.
  */
@@ -435,11 +454,142 @@ export async function enforceQuota(
   tenantId: string,
   entitlement: Entitlement,
 ): Promise<QuotaTimings | null> {
+  // Two independent ceilings, so neither has a reason to queue behind the
+  // other. The no-op handler is attached to the derived promise only: it keeps
+  // an early tenant throw from surfacing as an unhandled rejection, while the
+  // original promise still rethrows at the await below.
+  const capacity = enforceServiceCapacity(entitlement);
+  capacity.catch(() => {});
   const { state, timings } = await loadQuotaState(tenantId, entitlement);
+  // Decided first when both are spent: "you used your allowance" is the more
+  // actionable of the two truths, and the only one the user can act on.
   if (state.limit !== null && (state.used ?? 0) >= state.limit) {
     throw new GatewayError(429, "QUOTA_EXCEEDED", "Monthly usage limit reached.");
   }
+  await capacity;
   return timings;
+}
+
+/**
+ * Rejects a free-plan request once the whole product has spent its month.
+ *
+ * bs_plans bounds one account. Multiplied by a signup nobody gates, it bounds
+ * nothing — which is the exposure a public trial creates and the one the
+ * per-tenant quota was never able to answer. Paid plans always pass: this
+ * ceiling exists to bound free traffic, not to interrupt a month somebody
+ * already paid for.
+ *
+ * Exported because /ai/review checks its quota inline rather than through
+ * `enforceQuota`, and a ceiling one route does not consult is not a ceiling.
+ */
+export async function enforceServiceCapacity(entitlement: Entitlement): Promise<void> {
+  // Asked before the read rather than only inside the rule: a request the
+  // ceiling cannot refuse has no reason to pay for the count that would
+  // refuse it.
+  if (!serviceCeilingApplies(entitlement.plan)) return;
+  if (!serviceCapacityExhausted(await loadServiceCapacity())) return;
+  throw new GatewayError(
+    503,
+    "SERVICE_CAPACITY_REACHED",
+    // Written here rather than left to the client, because a client that has
+    // no phrase for this code shows this text verbatim — and the one thing it
+    // must not do is read as "you used up your own allowance".
+    "無料でご利用いただける今月分の枠が、サービス全体で上限に達しました。月が変わるとリセットされます。すぐにご利用になりたい場合は有料プランをご検討ください。",
+  );
+}
+
+export type { ServiceCapacity };
+
+/**
+ * The service-wide ceiling and this month's total against it.
+ *
+ * `requireUsageCount` mirrors `loadQuotaState`: enforcement can skip the count
+ * when there is no ceiling to compare it against, while the admin console
+ * wants the number regardless of whether a ceiling exists.
+ */
+export async function loadServiceCapacity(
+  requireUsageCount = false,
+): Promise<ServiceCapacity> {
+  const monthKey = currentMonthStartUTC().toISOString();
+  const now = Date.now();
+  // Started before the ceiling is known so an instance that does need the
+  // count has not spent the plan lookup's latency waiting to ask for it.
+  const counting =
+    serviceUsageCache?.monthKey === monthKey && now < serviceUsageCache.expiresAt
+      ? Promise.resolve(serviceUsageCache.used)
+      : countServiceMonthlyUsage().then((used) => {
+        serviceUsageCache = {
+          monthKey,
+          used,
+          expiresAt: Date.now() + PREFLIGHT_CACHE_TTL_MS,
+        };
+        return used;
+      });
+  const limit = await serviceMonthlyLimit();
+  if (limit === null && !requireUsageCount) {
+    counting.catch(() => {});
+    return { used: null, limit: null };
+  }
+  return { used: await counting, limit };
+}
+
+/**
+ * The configured ceiling (bs_service_limits, one row). null = none.
+ *
+ * A ceiling that cannot be read is treated as absent rather than as zero: the
+ * same posture as an unknown plan, where a config gap fails open instead of
+ * locking every user out (master-plan §3.3). The failure is not cached, so the
+ * next request tries the table again rather than inheriting the gap.
+ */
+export async function serviceMonthlyLimit(): Promise<number | null> {
+  const now = Date.now();
+  if (serviceLimitCache && now < serviceLimitCache.expiresAt) {
+    return serviceLimitCache.limit;
+  }
+  const admin = getSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("bs_service_limits")
+    .select("monthly_usage_limit")
+    .eq("id", "global")
+    .maybeSingle();
+  if (error) {
+    console.error("[gateway] service ceiling load failed:", error.message);
+    return null;
+  }
+  const limit =
+    typeof data?.monthly_usage_limit === "number" ? data.monthly_usage_limit : null;
+  serviceLimitCache = { limit, expiresAt: now + SERVICE_LIMIT_CACHE_TTL_MS };
+  return limit;
+}
+
+/**
+ * Advances the cached service total after this instance recorded a success,
+ * for the same reason the tenant cache is advanced: the value it would fetch
+ * next is the one it just wrote. A stale entry from a previous month is
+ * dropped rather than incremented, so a request at the month boundary cannot
+ * carry the old month's total into the new one.
+ */
+function noteServiceUsage(): void {
+  if (!serviceUsageCache) return;
+  const stale =
+    serviceUsageCache.monthKey !== currentMonthStartUTC().toISOString()
+    || serviceUsageCache.expiresAt <= Date.now();
+  if (stale) {
+    serviceUsageCache = null;
+    return;
+  }
+  serviceUsageCache.used += 1;
+}
+
+/** Successful AI requests across every tenant in the current UTC month. */
+export async function countServiceMonthlyUsage(): Promise<number> {
+  const admin = getSupabaseAdminClient();
+  const { count } = await admin
+    .from("bs_usage_events")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "success")
+    .gte("created_at", currentMonthStartUTC().toISOString());
+  return count ?? 0;
 }
 
 async function loadQuotaState(
