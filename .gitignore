@@ -43,3 +43,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Supabase CLI scratch (version check cache). Created by any `supabase` command.
+supabase/.temp/
