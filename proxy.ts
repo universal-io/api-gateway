@@ -43,7 +43,12 @@ function corsHeaders(origin: string): Headers {
   const headers = new Headers();
   headers.set("access-control-allow-origin", origin);
   headers.set("access-control-allow-credentials", "true");
-  headers.set("access-control-allow-methods", "GET, POST, OPTIONS");
+  // DELETE is here for one route — closing an account (DELETE /api/account).
+  // It was absent while the only client that could close an account was the
+  // macOS app, which sends no preflight at all; the omission therefore could
+  // not show up until a browser tried, and then it shows up as the account
+  // page's delete button failing rather than as a CORS setting.
+  headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
   headers.set("access-control-allow-headers", "authorization, content-type");
   // Without this, a cache that saw one origin's response can hand it to
   // another origin, which turns a correct allowlist into an incorrect one.
