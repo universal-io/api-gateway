@@ -73,10 +73,34 @@ npm test
 | `bs_tenants` | 課金・所有の単位（`personal` / `enterprise`） |
 | `bs_profiles` | ユーザー → 既定テナントの対応 |
 | `bs_entitlements` | テナントが今何をしてよいか（plan / status / 上限） |
-| `bs_plans` | プラン catalog（quota・features の正本） |
+| `bs_plans` | プラン catalog（プランごとの quota・features の正本） |
+| `bs_service_limits` | **サービス全体の月キャップ**（1行・`id = 'global'`）。freeだけ断り有料は通す |
 | `bs_usage_events` | 利用記録（運用情報のみ。**画像・回答は保存しない**） |
 
 セットアップは [docs/supabase-setup.md](docs/supabase-setup.md)。
+
+### 上限は2段ある
+
+**1リクエスト = 1ユニット。** `/ai/*` の全ルートで判定し、UTC月初にリセットする。
+どちらも**DBの値だけで決まる**（コードにもenvにも無い）。`/admin` から見える。
+
+| | どこ | 効く相手 | 超えたとき |
+|---|---|---|---|
+| テナントの月枠 | `bs_entitlements.monthly_review_limit` → 無ければ `bs_plans.monthly_usage_limit` | そのテナント | `QUOTA_EXCEEDED`（429） |
+| **サービス全体の月キャップ** | `bs_service_limits.monthly_usage_limit` | **freeプランのみ**（有料は通す） | `SERVICE_CAPACITY_REACHED`（503） |
+
+**この2つを同じコードで返してはいけない。** 前者は「あなたが使い切った」、後者は
+「サービス全体が上限」で、後者を前者として伝えると、ほとんど使っていない人に
+使い切ったと告げることになる。
+
+**読めなかった上限は無制限として扱う。** 設定行が無い・プランが未知・カウントが落ちた、
+はいずれも「そのまま通す」（master-plan §3.3）。守っている金額は運用者が決めた数字だが、
+締め出す人数はこちら側で決められない。判定そのものは
+[lib/server/service-capacity.ts](lib/server/service-capacity.ts)（テスト可能な純関数）で、
+数え方とキャッシュは `lib/server/gateway.ts` にある。
+
+**時間あたりの制限は無い。** 月枠だけなので1人が1日で使い切れる。`RATE_LIMITED` は
+プロバイダ側の429の転送で、こちら側の制限ではない。
 
 ## デプロイ
 
