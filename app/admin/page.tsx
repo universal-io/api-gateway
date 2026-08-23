@@ -14,6 +14,7 @@ import type {
   OverviewStats,
   OperationStat,
   ModelStat,
+  PlatformStat,
 } from "@/lib/server/admin-stats";
 import type { AdminUserRow } from "@/lib/server/admin-users";
 
@@ -124,6 +125,7 @@ function AdminBody({ data, token }: { data: Overview; token: string }) {
         <div className="flex flex-col gap-8">
           <SummarySection stats={stats} />
           <OperationSection operations={stats.operations} />
+          <PlatformSection platforms={stats.platforms} />
           <ModelSection models={stats.models} />
           <DailySection daily={stats.daily} />
           <LinksSection />
@@ -282,7 +284,8 @@ function BillingConfigSection({ billing }: { billing: EffectiveConfig["billing"]
 function SummarySection({ stats }: { stats: OverviewStats }) {
   return (
     <Section title="利用統計（今月）">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <CapacityBar capacity={stats.capacity} />
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card label="登録ユーザー" value={String(stats.userCount)} />
         <Card label="テナント" value={String(stats.tenantCount)} />
         <Card
@@ -299,6 +302,55 @@ function SummarySection({ stats }: { stats: OverviewStats }) {
         />
       </div>
     </Section>
+  );
+}
+
+/**
+ * The service-wide ceiling, and how much of it this month has spent.
+ *
+ * Given its own bar above the cards because it is the only number here that
+ * can stop the product: the cards report what happened, this one reports how
+ * much room is left before free traffic is refused. A ceiling nobody can see
+ * is one that gets discovered by a user hitting it.
+ */
+function CapacityBar({ capacity }: { capacity: OverviewStats["capacity"] }) {
+  const { used, limit } = capacity;
+  if (limit === null) {
+    return (
+      <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+        全体キャップ未設定（無制限）— 今月 {used.toLocaleString()} 件。
+        <span className="text-faint">
+          {" "}
+          bs_service_limits の monthly_usage_limit で設定します。
+        </span>
+      </p>
+    );
+  }
+  const ratio = limit === 0 ? 1 : Math.min(1, used / limit);
+  // 80% is where a ceiling stops being background information. Amber comes
+  // from Tailwind's built-in palette, not the shared token set: `amber` is a
+  // family colour but not a --color-* in this app's @theme, and a class with
+  // no token behind it applies nothing at all rather than falling back.
+  const near = ratio >= 0.8;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-sm">
+        <span className="font-medium">全体キャップ（今月・free停止ライン）</span>
+        <span className={near ? "font-semibold text-amber-600" : ""}>
+          {used.toLocaleString()} / {limit.toLocaleString()} 件（
+          {formatPercent(ratio)}）
+        </span>
+      </div>
+      <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-line">
+        <div
+          className={`h-full rounded-full ${near ? "bg-amber-500" : "bg-iris"}`}
+          style={{ width: `${ratio * 100}%` }}
+        />
+      </div>
+      <p className="mt-1 text-[11px] text-faint">
+        到達すると free プランのAIリクエストだけを断ります（有料プランは通します）。
+      </p>
+    </div>
   );
 }
 
@@ -631,6 +683,34 @@ function OperationSection({ operations }: { operations: OperationStat[] }) {
                 <Cell>{formatPercent(op.successRate)}</Cell>
                 <Cell>{op.avgLatencyMs != null ? `${op.avgLatencyMs} ms` : "—"}</Cell>
                 <Cell>{op.totalUnits.toLocaleString()}</Cell>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Section>
+  );
+}
+
+/** Which client is spending the month — the split that only started mattering
+ * when the web app opened to the public. */
+function PlatformSection({ platforms }: { platforms: PlatformStat[] }) {
+  const total = platforms.reduce((sum, p) => sum + p.count, 0);
+  return (
+    <Section title="クライアント別（今月・成功のみ）">
+      {platforms.length === 0 ? (
+        <Empty />
+      ) : (
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <Row header cells={["プラットフォーム", "件数", "割合"]} />
+          </thead>
+          <tbody>
+            {platforms.map((p) => (
+              <tr key={p.platform}>
+                <Cell mono>{p.platform}</Cell>
+                <Cell>{p.count}</Cell>
+                <Cell>{total === 0 ? "—" : formatPercent(p.count / total)}</Cell>
               </tr>
             ))}
           </tbody>
