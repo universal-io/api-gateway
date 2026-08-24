@@ -115,6 +115,17 @@ type VisionRequestBody = {
       kind?: string;
       point?: { x?: number; y?: number };
       region?: { x?: number; y?: number; w?: number; h?: number };
+      /**
+       * The candidate the client's accessibility tree measured at the pointed
+       * spot — the smallest candidate rectangle containing the point. The mark
+       * says where; this says what the OS measured there, which pins the model
+       * to the element under the mark instead of a semantically similar one
+       * elsewhere (measured 2026-08-24: a tap on GitLab's toolbar "+" answered
+       * about the repository "+"). References an id in `candidates`; unknown
+       * ids are ignored rather than rejected, because the candidate list is
+       * capped and the referenced entry may not have survived the cap.
+       */
+      hit_candidate_id?: string;
     };
     /** Client can draw on the capture and wants coordinates back. */
     wants_annotations?: boolean;
@@ -944,6 +955,17 @@ function isValidPointer(
   if (typeof pointer !== "object" || pointer === null || Array.isArray(pointer)) {
     return false;
   }
+  if (
+    pointer.hit_candidate_id !== undefined
+    && (
+      typeof pointer.hit_candidate_id !== "string"
+      || pointer.hit_candidate_id.length === 0
+      // Same ceiling as a candidate id, because that is what it names.
+      || pointer.hit_candidate_id.length > 128
+    )
+  ) {
+    return false;
+  }
   if (pointer.kind === "point") {
     // Exactly one shape per kind: a body carrying both would leave the scope of
     // the answer to whichever field the reader happens to look at first.
@@ -978,7 +1000,11 @@ function pointerFromWire(
 ): VisionPointer | undefined {
   if (!pointer) return undefined;
   if (pointer.kind === "point") {
-    return { kind: "point", point: { x: pointer.point!.x!, y: pointer.point!.y! } };
+    return {
+      kind: "point",
+      point: { x: pointer.point!.x!, y: pointer.point!.y! },
+      hitCandidateId: pointer.hit_candidate_id,
+    };
   }
   return {
     kind: "region",
@@ -988,5 +1014,6 @@ function pointerFromWire(
       w: pointer.region!.w!,
       h: pointer.region!.h!,
     },
+    hitCandidateId: pointer.hit_candidate_id,
   };
 }

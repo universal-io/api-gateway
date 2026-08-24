@@ -91,10 +91,16 @@ export type VisionEngineInput = {
   imageSize?: { width: number; height: number };
 };
 
-/** What the user pointed at, as sent by a client with no accessibility tree. */
+/**
+ * What the user pointed at. The coordinates and the burned mark say where;
+ * `hitCandidateId`, when a client with an accessibility tree could measure the
+ * element at that spot, says what — it names an entry in `candidates`, so the
+ * prompt can pin the subject to the measured element instead of leaving the
+ * model to pick among lookalikes.
+ */
 export type VisionPointer =
-  | { kind: "point"; point: { x: number; y: number } }
-  | { kind: "region"; region: VisionBox };
+  | { kind: "point"; point: { x: number; y: number }; hitCandidateId?: string }
+  | { kind: "region"; region: VisionBox; hitCandidateId?: string };
 
 /** One provider call's outcome, before it is dressed as a `VisionEngineOutput`. */
 type VisionModelCall = {
