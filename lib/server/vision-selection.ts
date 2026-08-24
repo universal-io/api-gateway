@@ -29,7 +29,16 @@ export type VisionSelection = {
   structures: VisionSelectionStructure[];
   frames: VisionSelectionFrame[];
   acquisitionCompleteness: "complete" | "partial" | "visual_only";
-  acquisition: "ax_document_selection" | "ax_selected_text" | "ax_element" | "visual_highlight";
+  acquisition:
+    | "ax_document_selection"
+    | "ax_selected_text"
+    | "ax_element"
+    | "visual_highlight"
+    // Read at the pointer on the pointing overlay: the user swept across text
+    // that no application had selected, and the client resolved the swept
+    // range through the accessibility text APIs (AXRangeForPosition and
+    // friends). The application's own selection state was never touched.
+    | "ax_range_at_pointer";
   captureVisibility: "visible" | "partial" | "off_capture" | "unknown";
   wireTruncated: boolean;
   originalUTF16Units: number;
@@ -86,6 +95,7 @@ export function isValidVisionSelectionWire(value: unknown): value is VisionSelec
     "ax_selected_text",
     "ax_element",
     "visual_highlight",
+    "ax_range_at_pointer",
   ]);
   const visibility = new Set(["visible", "partial", "off_capture", "unknown"]);
   if (!kinds.has(selection.kind ?? "")
