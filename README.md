@@ -7,7 +7,7 @@
 すべてここを経由し、**AIプロバイダのAPIキーをクライアントに置かない**（ファミリー共通の規則）。
 
 2026-08-16に `universal-io/app-mac` の `web/` から履歴ごと切り出した。切り出しの理由と
-経緯は `app-web/docs/requirements.md` §3・§9 を正本とする。
+経緯は `app-web/docs/archive/requirements.md` §3・§9 を正本とする。
 
 ---
 
@@ -18,8 +18,8 @@
 | **`api-gateway`（本リポジトリ）** | **バックエンドAPI＋認証UI＋管理画面＋課金** | **`api.universal-io.com`** |
 | `app-mac` | macOSクライアント | DMG配布 |
 | `app-ios` | iOS/iPadOSクライアント | App Store（予定） |
-| `app-web` | Webクライアント（企画中） | 未定 |
-| `web-product` | マーケティングサイト | `universal-io.com` |
+| `app-web` | Webクライアント | `universal-io.com`（ルート） |
+| `web-product` | マーケティングサイト | `universal-io.com/product/*` の中継先 |
 
 **このリポジトリはマーケティングサイトではない。** `/` は `/auth` へリダイレクトする。
 製品紹介・料金ページは `web-product` にあり、そこから本ホストの `/billing/start` へ

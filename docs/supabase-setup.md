@@ -24,6 +24,31 @@ Database naming rule:
 - Bomb Squad-owned tables use the `bs_` prefix.
 - Existing tables from other projects are left untouched.
 
+## アカウントと外部サービス
+
+外部設定を調査・変更する時だけ参照する。この節をアカウント情報の正本とする。
+
+**このプロダクトの外部設定は複数のGoogleアカウントに散っている。**
+探し始める前にここを見ること。一度、OAuthクライアントを別アカウントのプロジェクトで
+探し回って見つけられず、「Googleサインインは設定されていない」と誤って結論した。
+
+| 何 | どこ | 備考 |
+|---|---|---|
+| **Google認証（OAuth）のGCP** | **`whatifepxyz@gmail.com`** | ここ以外のアカウントでは**プロジェクトの存在すら見えない**（`resourcemanager.projects.get` が403）。「無い」と誤認しやすい |
+| ↳ プロジェクト番号 | `899703844772` | `https://console.cloud.google.com/auth/clients?project=899703844772` |
+| ↳ OAuthクライアント名 | `Supabase Auth Client` | Client ID `899703844772-akc49a6icvjt6q7q44a9iqm6g80gjog4.apps.googleusercontent.com`（公開値） |
+| ↳ OAuth同意画面 | 同じプロジェクト内 | ユーザーに見えるアプリ名はここ。別プロジェクトで整えても効果はない |
+| **Gemini APIキー** | `matsumotokaya@gmail.com` の `My First Project`（番号 `118986914562`） | `universal-io` という名前だが**認証とは無関係**。Gateway の `GEMINI_API_KEY`。Google Cloud が「認証情報」に人の認証と機械の認証を並べているだけ |
+| **Supabase** | organization `whatif-ep` / project `bomb-squad` | app-mac・api-gateway・app-web が**同一プロジェクトを共有**。だから同じアカウント・同じテナント・同じ利用枠になる |
+| **顧客向け問い合わせ先** | **`info@universal-io.com`** | 届け先は `matsumotokaya@gmail.com` |
+
+**Client ID の先頭の数字がGCPのプロジェクト番号。** 迷ったらこれで辿れる。
+
+**Client Secret は Google 側で再表示できない。** Supabase に入っている値が唯一の在処で、
+紛失したら新しいシークレットを追加してローテーションする。
+
+**6か月使われないOAuthクライアントは削除対象**（Googleの通知あり、削除後30日は復元可）。
+
 ## Current Migration Files
 
 - `supabase/migrations/0001_bs_core_schema.sql` — コアスキーマ:
@@ -148,7 +173,7 @@ Current web values:
 **アカウントを間違えると見つからない。** クライアントは
 `whatifepxyz@gmail.com` のプロジェクト `899703844772`（名前 `Supabase Auth Client`）にある。
 他のアカウントでは**プロジェクトの存在すら見えない**（403）ので「無い」と誤認しやすい。
-AGENTS.md の「アカウントと外部サービス」が正本。
+上の「アカウントと外部サービス」が正本。
 
 - Authorized redirect URIs（これ1つだけでよい。各アプリのURLではない）:
   - `https://skcsbcyivjcvevxntvqa.supabase.co/auth/v1/callback`
@@ -188,7 +213,13 @@ callback assumptions where applicable.
 
 ## Applying The Migration
 
-Two safe paths:
+すべてのschema/data read・SQL作業前に `supabase_bomb_squad` のproject URLを確認し、
+`https://skcsbcyivjcvevxntvqa.supabase.co` と完全一致させる。
+不一致や期待するテーブルの欠落時は停止し、正しいMCPの再接続・セッション再開を依頼する。
+代替のローカル/Docker DBは作らない。書き込みごとにURL再確認、SQL/migrationレビュー、
+ユーザーの明示承認が必要。下記の手動/CLI経路も承認を迂回する手順ではない。
+
+適用経路:
 
 1. Review the SQL file in advance, then paste it into the Supabase SQL editor.
 2. Apply it through Supabase CLI once local Supabase project wiring is added.
@@ -210,16 +241,9 @@ like:
 Could not find the function public.bs_initialize_current_user without parameters in the schema cache
 ```
 
-that means the Bomb Squad schema migration has not been applied to this
-Supabase project yet.
-
-In that case:
-
-1. Open Supabase Dashboard for `https://skcsbcyivjcvevxntvqa.supabase.co`
-2. Go to SQL Editor
-3. Paste the contents of `supabase/migrations/0001_bs_core_schema.sql`
-4. Run it once
-5. Re-test login
+このエラーだけで未移行と断定しない。接続先・schema cache・適用履歴の問題を区別する。
+期待するテーブルが欠ける場合は上記の停止条件に従い、初期migrationを自動で再実行しない。
+正しい接続を確認した後、必要なSQLをレビューし、明示承認を得て適用する。
 
 The current web auth flow depends on `public.bs_initialize_current_user()` to
 provision `bs_profiles`, `bs_tenants`, `bs_tenant_members`, and
@@ -274,42 +298,10 @@ where schemaname = 'public'
 order by tablename;
 ```
 
-## Next Work After Setup
+## Auth verification
 
-- Verify Google OAuth end-to-end on both `https://bombsquad.me` and `http://localhost:3000`.
-- Verify Google OAuth end-to-end on native macOS with `bombsquad://auth/callback`.
-- Add Apple ID later using the same auth callback surface.
-- Scaffold the web AI gateway.
-
-## Current macOS Auth Checkpoint
-
-- The macOS app now expects `BOMB_SQUAD_SUPABASE_URL` and
-  `BOMB_SQUAD_SUPABASE_ANON_KEY`.
-- Settings includes the Bomb Squad account section.
-- The implemented macOS auth methods are:
-  - Google OAuth
-  - email link
-- Native Google sign-in uses Supabase OAuth with the callback URL
-  `bombsquad://auth/callback`.
-- Native email sign-in also uses the callback URL `bombsquad://auth/callback`.
-- After successful sign-in, the app calls `public.bs_initialize_current_user()`.
-- Apple ID remains pending.
-
-## Current web Auth Checkpoint
-
-- The Vercel-facing UI now lives under `web/`.
-- The planned production origin is `https://bombsquad.me`.
-- The main routes are:
-  - `/`
-  - `/auth`
-  - `/auth/callback`
-  - `/pricing`
-- The web app expects:
-  - `NEXT_PUBLIC_SUPABASE_URL`
-  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-  - `NEXT_PUBLIC_BOMB_SQUAD_API_BASE_URL`
-- A starter env file exists at `web/.env.example`.
-- The current web auth methods are:
-  - email link
-  - Google OAuth
-- Apple ID remains pending.
+認証設定を変更したら、該当クライアントのGoogle OAuth・メールリンクを実機で確認する。
+現行のオリジンとcallbackは上の「Redirects And Deep Links」を参照する。
+macOSは `universal-io://auth/callback`、Webは `/auth/callback` を使用する。
+ログイン後の `public.bs_initialize_current_user()` による初期化も確認する。
+Apple IDは未対応。旧 `bombsquad.me` / `bombsquad://` は互換用で、新規設定の既定にしない。
