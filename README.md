@@ -33,6 +33,7 @@
 - `POST /api/ai/review` — 入力文章のレビュー
 - `POST /api/ai/suggest` — コンポーズの先回り文案
 - `POST /api/ai/transcribe` — 音声の文字起こし
+- `POST /api/ai/live-token` — 声の相棒（R18・実験）がGemini Liveへつなぐ使い捨てトークンの発行
 
 各AI routeは**認証付きGETをウォームアップとして受け付ける**（providerを呼ばず204）。
 

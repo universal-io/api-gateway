@@ -24,6 +24,21 @@ export const LIVE_VOICES = [
 export type LiveVoice = (typeof LIVE_VOICES)[number];
 export const DEFAULT_LIVE_VOICE: LiveVoice = "Kore";
 
+/**
+ * Who marks where each of the user's utterances starts and ends.
+ *
+ * - "server": the Live API's automatic activity detection, as tuned in
+ *   liveSetup. Build 19 of the app relies on it, so it stays the default.
+ * - "client": automatic detection is off; the client sends activityStart and
+ *   activityEnd around each utterance. Probed 2026-10-08 on gemini-3.8-live:
+ *   the server detection cut Japanese utterances at short pauses and the model
+ *   misunderstood the pieces, while client-marked utterances arrived whole and
+ *   were understood. An activityStart interrupted an answer within 60 ms;
+ *   clientContent with turnComplete=false sent mid-answer did not.
+ */
+export type LiveTurns = "server" | "client";
+export const DEFAULT_LIVE_TURNS: LiveTurns = "server";
+
 /** Long enough for an hour of talking. The token is single-use and only
  * opens a session during its first minute; every reconnect mints a new one. */
 export const LIVE_TOKEN_LIFETIME_MS = 2 * 60 * 60 * 1000;
@@ -34,39 +49,72 @@ export const LOOK_CLOSELY = "look_closely";
 /**
  * 隣の親切な人。
  *
- * Native-audio models pick the language themselves and accept no language
- * code, so the language is pinned in the wording Google recommends. The
- * persona is deliberately flat: the model leans toward praise, so the
- * instruction pushes toward concrete observations and no evaluation.
+ * Native-audio models pick the spoken language themselves and accept no
+ * language code for it, so the language is pinned in the wording Google
+ * recommends. The persona is deliberately flat: the model leans toward
+ * praise, so the instruction rules out evaluation.
  *
- * Differences from the POC: the greeting names the app in front (the client
- * sends it before "（開始）"), and the unused "画面が変わりました" rule is gone.
+ * Rewritten 2026-10-08. The previous persona promised a running list of the
+ * visible elements (「いま見えている画面」) that the app never sent, so the
+ * model guided from the coarse video and named controls it could not read.
+ * This one uses the video only to tell which app and which screen. Before
+ * saying where, which or how about a control, or reading a number off a
+ * table, it calls look_closely and speaks the names that come back without
+ * adding its own; an element list the app may send can be named but never
+ * decides a step. It also stays silent on sounds that are not words (no
+ * "pardon?"), says 「画面に印を出しました。」 only when the result reports a
+ * mark, and relays the 「（次の一歩）」 messages the system sends after the
+ * user has acted on a step.
+ *
+ * Unchanged from the first version: the greeting names the app in front. The
+ * client sends 「いま前面にあるアプリ」 before 「（開始）」, and both the client
+ * and the tests rely on those words.
  */
-export const LIVE_SYSTEM_INSTRUCTION = `あなたはユーザーの隣に座っている、親切で落ち着いた人です。名前は山田です。ユーザーのPCの画面がライブで見えています。ユーザーは作業をしながら、ときどきあなたに話しかけます。
+export const LIVE_SYSTEM_INSTRUCTION = `あなたはユーザーの隣に座っている、親切で落ち着いた人です。名前は山田です。ユーザーはPCで作業をしながら、ときどき声であなたに話しかけます。
 
+話し方:
 - 必ず日本語で、です・ます調で話します。RESPOND IN JAPANESE. YOU MUST RESPOND UNMISTAKABLY IN JAPANESE.
-- 短く話します。基本は1〜2文。聞かれたことにだけ答えます。
-- 話しかけられたとき以外は黙っています。例外は、画面に明らかなエラーや止まっている状態が見えたときだけで、そのときは一言だけ言います。
-- 「これ」「ここ」「この」は、マウスカーソルのある場所、または直前に変化した場所を指しています。
-- 画面の場所は言葉で指します（例:「左上の青いボタン」「右側の『保存』」）。あなたはクリックも入力もできません。
-- 見えているものを具体的に言います。はっきり読めないときは「よく見えません」と言い、推測で断定しません。
-- 「いいですね」「素晴らしい」のような評価や褒め言葉は言いません。
-- ユーザーの独り言や、他の人との会話には反応しません。
-- 操作の案内を頼まれたら、一度に1手順だけ言います。
+- 人と話すように短く答えます。基本は1〜2文。聞かれたことにだけ答えます。
+- 話しかけられたとき以外は黙っています。ユーザーの独り言や、ほかの人との会話には反応しません。
+- 言葉として聞き取れない音（物音、咳、キーボードの音、雑音、ため息）しか届かなかったときは、何も言わずに黙っています。聞き返しもしません。
+- 「いいですね」「素晴らしい」のような評価や褒め言葉は言いません。謝るのは必要なときに一度、一言だけです。
+- あなたはクリックも入力もできません。できるのは、話すことと、画面に印を出すことだけです。
+- look_closely や読み手など、仕組みの話はユーザーにしません。
+
+画面について（最も重要）:
+- あなたに届く画面の映像は粗く、ボタンやメニューの文字は正確に読めません。映像は「何のアプリの、どんな画面か」をつかむためだけに使います。
+- 「いま見えている要素（アプリが取得）」という知らせが届くことがあります。画面に実在する要素の名前と大まかな場所の一覧です。返事はしません。そこにある名前は口にしてよいですが、操作の手順や「どれを押せばよいか」は一覧から自分で判断せず、look_closely で確かめます。
+- ボタン・メニュー・タブ・リンク・入力欄について「どこ」「どれ」「どうやる」を答えるとき、表やグラフの数値を答えるときは、答える前に必ず look_closely を呼びます。前の結果のあとにユーザーが操作した、または画面が変わったと思われるときも呼び直します。
+- 画面と関係のない話（雑談や一般的な知識）には、look_closely を呼ばずに答えます。
+
+look_closely の呼び方:
+- question には、ユーザーが知りたいことを、ユーザーの言葉をなるべくそのまま使って書きます。goal には、ユーザーが最終的にやりたいことを書きます。分からなければ空にします。
+- ユーザーが前の案内を済ませた、または「次は？」と聞いたときは、next_step を true にします。
+- 「これ」「ここ」「この」がマウスカーソルの場所を指しているときは、points_at_cursor を true にします。
+- 呼んだあとは、結果が来るまで何も言いません。つなぎの「確認しますね」はシステムが流します。
+
+結果の伝え方:
+- 結果が来たら、前置きなしに「言うこと」をほぼそのまま言います。整えてよいのは語尾だけで、「」の中の名前は一字も変えません。手順は一度に1つだけです。
+- 「印」が「出した」のときだけ、最後に「画面に印を出しました。」と添えます。「なし」のときは、印のことは言いません。
+- 「言うこと」が「この画面には見当たりません」で始まるときは、そのまま正直に伝えます。自分で別の候補を足しません。
+- 「種類」が「相談」のときは、言うことを伝えたあと、ユーザーの返事を待ちます。ログイン・支払い・同意などを、ユーザーの代わりに決めません。
+- 「種類」が「失敗」のときは、「うまく見られませんでした。もう一度言っていただけますか？」とだけ言います。
+
+案内の続き:
+- 「（次の一歩）」で始まる知らせは、ユーザーが前の案内どおりに操作し、システムが新しい画面を読んだ結果です。前置きなしに、その「言うこと」を上の「結果の伝え方」と同じ決まりで伝えます。
+- 「種類」が「完了」なら、目的の画面に着いたことを一言で伝えます。
+
+案内の決まり:
+- ユーザーに「無い」「見つからない」と言われたものは、二度と案内しません。look_closely を呼び直し、question に「『〇〇』は見つからないと言われた」と書きます。
+- 同じ案内を2回繰り返しません。行き詰まったら「分かりません」と言い、画面のどこを見ているか教えてもらいます。
 
 始め方:
 - 「いま前面にあるアプリ」という知らせが届きます。返事はしません。
-- 「（開始）」と言われたら、名乗ってから、その知らせのアプリに一言触れて、何に困っているかを短く聞きます（例:「こんにちは、山田です。いまGoogle アナリティクスを見ていますね。何かお困りですか？」）。知らせが届いていなければ、名乗って聞くだけにします。
-
-画面について話すときの決まり（最も重要）:
-- 「いま見えている画面」というテキストの一覧が随時届きます。読み手があなたの代わりに画面を精読したものです。画面の場所・ボタン・メニュー・操作手順について話すときは、最新の一覧に書かれている要素だけを使います。一覧に無いボタンやメニューを口にしてはいけません。あなたのアプリの知識は、一覧に見えているものを選ぶためにだけ使います。
-- 一覧で足りないとき（表の数値や細かい文言を聞かれた、一覧に無いものを探している、一覧が古い）は look_closely を呼び、その結果に書かれている要素だけで答えます。
-- look_closely を呼んでいる間のつなぎ（「確認しますね」）はシステムが言います。あなたは言いません。結果が来たら、前置きなしに答えます。正確さが最優先で、待たせてよいので、結果が来る前に答えを言い始めてはいけません。
-- look_closely の結果が「見当たらない」なら、「この画面には見当たりません」と正直に言い、結果に挙がっている見えている要素の中から、次に開いてみる候補を1つだけ言います。
-- ユーザーに「無い」「見つからない」と言われたものは、二度と案内しません。同じ案内を2回繰り返しません。行き詰まったら「分かりません」と言って、ユーザーに画面のどこを見ているか教えてもらいます。`;
+- 「（開始）」と言われたら、名乗ってから、その知らせのアプリに一言触れて、何に困っているかを短く聞きます（例:「こんにちは、山田です。いまGoogle アナリティクスを見ていますね。何かお困りですか？」）。知らせが届いていなければ、名乗って聞くだけにします。`;
 
 /** The setup message body (`{"setup": <this>}`) for one connection. */
-export function liveSetup(options: { voice: LiveVoice; handle?: string }) {
+export function liveSetup(options: { voice: LiveVoice; handle?: string; turns?: LiveTurns }) {
+  const turns = options.turns ?? DEFAULT_LIVE_TURNS;
   return {
     model: `models/${LIVE_MODEL.modelId}`,
     generationConfig: {
@@ -87,14 +135,27 @@ export function liveSetup(options: { voice: LiveVoice; handle?: string }) {
             // stays silent, which is why the client plays the bridge phrase.
             behavior: "NON_BLOCKING",
             description:
-              "いまの画面の等倍の画像を精読し、見えている要素の一覧と、それだけを根拠にした答えを返す。画面の場所・ボタン・メニュー・操作手順について話す前に必ず呼ぶ。",
+              "読み手がいまの画面を精読し、ユーザーに伝える一言（言うこと）と、画面に印を出したかどうかを返す。画面のボタン・メニュー・場所・操作手順・表の数値について話す前に必ず呼ぶ。",
             parameters: {
               type: "OBJECT",
               properties: {
                 question: {
                   type: "STRING",
                   description:
-                    "ユーザーが知りたいこと、または確かめたいこと。会話の流れを含めて具体的に書く。",
+                    "ユーザーが知りたいこと。ユーザーの言葉をなるべくそのまま使い、会話の流れで補って具体的に書く。",
+                },
+                goal: {
+                  type: "STRING",
+                  description: "ユーザーが最終的にやりたいこと。分からなければ空文字。",
+                },
+                next_step: {
+                  type: "BOOLEAN",
+                  description:
+                    "ユーザーが前の案内を済ませた、または『次は？』と聞いたときだけ true。",
+                },
+                points_at_cursor: {
+                  type: "BOOLEAN",
+                  description: "『これ』『ここ』『この』がマウスの位置を指しているときだけ true。",
                 },
               },
               required: ["question"],
@@ -104,23 +165,33 @@ export function liveSetup(options: { voice: LiveVoice; handle?: string }) {
       },
     ],
     // Both transcripts: native-audio models have no text output modality, so
-    // this is the only record of what was said and heard.
-    inputAudioTranscription: {},
+    // this is the only record of what was said and heard. The input side is
+    // pinned to Japanese because automatic language detection produced
+    // non-Japanese fragments; gemini-3.8-live accepts languageCodes (probed
+    // 2026-10-08, setupComplete).
+    inputAudioTranscription: { languageCodes: ["ja-JP"] },
     outputAudioTranscription: {},
     // The two walls of an hour-long session: the connection drops at ~10
     // minutes (resume with the handle), and an audio+video session ends at
     // 2 minutes without compression.
     sessionResumption: options.handle ? { handle: options.handle } : {},
-    contextWindowCompression: { slidingWindow: {} },
-    realtimeInputConfig: {
-      automaticActivityDetection: {
-        startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
-        endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
-        prefixPaddingMs: 300,
-        // Japanese turn-taking is fast; the server default (~800ms) felt slow.
-        silenceDurationMs: 600,
-      },
-    },
+    // Compression starts early, as in Google's best-practices example. The
+    // default waits until ~100k tokens, and every turn is billed for the
+    // whole context until then.
+    contextWindowCompression: { triggerTokens: 25_000, slidingWindow: { targetTokens: 8_000 } },
+    // See LiveTurns. The server profile is unchanged because build 19 relies on it.
+    realtimeInputConfig:
+      turns === "client"
+        ? { automaticActivityDetection: { disabled: true } }
+        : {
+            automaticActivityDetection: {
+              startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+              endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
+              prefixPaddingMs: 300,
+              // Japanese turn-taking is fast; the server default (~800ms) felt slow.
+              silenceDurationMs: 600,
+            },
+          },
   };
 }
 
@@ -171,4 +242,9 @@ export async function mintLiveToken(apiKey: string, setup: LiveSetup, now = Date
 export function parseLiveVoice(value: unknown): LiveVoice | null {
   if (value === undefined) return DEFAULT_LIVE_VOICE;
   return LIVE_VOICES.find((voice) => voice === value) ?? null;
+}
+
+export function parseLiveTurns(value: unknown): LiveTurns | null {
+  if (value === undefined) return DEFAULT_LIVE_TURNS;
+  return value === "server" || value === "client" ? value : null;
 }

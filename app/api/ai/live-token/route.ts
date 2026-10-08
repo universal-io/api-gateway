@@ -9,7 +9,12 @@ import {
 } from "@/lib/server/gateway";
 import { getServerEnv } from "@/lib/server/env";
 import { LIVE_MODEL } from "@/lib/server/ai-routing";
-import { liveSetup, mintLiveToken, parseLiveVoice } from "@/lib/server/live-session";
+import {
+  liveSetup,
+  mintLiveToken,
+  parseLiveTurns,
+  parseLiveVoice,
+} from "@/lib/server/live-session";
 
 // R18 voice companion (experiment). Mints a single-use Gemini Live token with
 // the whole session setup locked in, and returns that setup for the client to
@@ -21,7 +26,7 @@ const MAX_HANDLE_CHARS = 4_096;
 type LiveTokenRequestBody = {
   request_id?: string;
   operation?: string;
-  input?: { handle?: unknown; voice?: unknown };
+  input?: { handle?: unknown; voice?: unknown; turns?: unknown };
   client?: { platform?: string; app_version?: string };
 };
 
@@ -57,6 +62,11 @@ export async function POST(request: Request): Promise<Response> {
     if (!voice) {
       return errorResponse(400, "BAD_REQUEST", "input.voice is not a known voice.", requestId);
     }
+    // Build 19 sends no turns and keeps the server's activity detection.
+    const turns = parseLiveTurns(body.input?.turns);
+    if (!turns) {
+      return errorResponse(400, "BAD_REQUEST", "input.turns must be 'server' or 'client'.", requestId);
+    }
 
     const { userId, tenantId, entitlement } = await authenticateAIRequest(request);
     // One session is one unit. A resume continues the same conversation, so it
@@ -69,7 +79,7 @@ export async function POST(request: Request): Promise<Response> {
       return errorResponse(503, "PROVIDER_ERROR", "Live API is not configured on the server.", requestId);
     }
 
-    const setup = liveSetup({ voice, handle });
+    const setup = liveSetup({ voice, handle, turns });
     const started = Date.now();
     try {
       const minted = await mintLiveToken(apiKey, setup, started);

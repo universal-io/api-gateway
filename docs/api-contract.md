@@ -443,11 +443,28 @@ macOSはこの名前をパネルに表示する。Skillのサイレント注入�
 実験なので、終了時に route・`lib/server/live-session.ts`・`LIVE_MODEL`・本節を撤去する。
 
 - request: 共通 envelope。`operation: "live_token"`、`input.handle?`（再開ハンドル、4096文字以下）、
-  `input.voice?`（`Kore`／`Aoede`／`Leda`／`Zephyr`／`Puck`／`Charon`／`Fenrir`／`Orus`、既定 `Kore`）
+  `input.voice?`（`Kore`／`Aoede`／`Leda`／`Zephyr`／`Puck`／`Charon`／`Fenrir`／`Orus`、既定 `Kore`）、
+  `input.turns?`（`server`／`client`、既定 `server`。それ以外は `400 BAD_REQUEST`）
 - response: `result{token, setup, expires_at, new_session_expires_at, resumed}`、`meta{model_vendor, model_id, latency_ms}`
   - `token` は `auth_tokens/…`。1回だけ、発行から60秒以内にセッションを開ける。寿命は2時間
   - クライアントは `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=<token>`
     へつなぎ、最初のメッセージとして `{"setup": <result.setup>}` をそのまま送る
+- `turns` は、ユーザーの発話の始まりと終わりを誰が決めるかを選ぶ。変わるのは setup の `realtimeInputConfig` だけ
+  - `server`（既定）: Live API の自動発話検出（開始・終了とも感度 high、前置き300ms、無音600msで終わり）。
+    `turns` を送らない build 19 がこれに依存しているので、設定を変えない
+  - `client`: 自動検出を切り（`automaticActivityDetection.disabled: true`）、クライアントが発話ごとに
+    `activityStart`／`activityEnd` を送る。2026-10-08 に `gemini-3.8-live` で測ったところ、自動検出は日本語の発話を
+    短い間で切ってモデルが誤解したが、クライアントが区切ると発話が丸ごと届いて理解された。回答中の `activityStart` は
+    60ms以内に回答を止める（回答中に送った `clientContent`（`turnComplete: false`）では止まらない）
+- 両方に共通: 入力の文字起こしは `languageCodes: ["ja-JP"]`（自動判定では日本語以外の断片が混ざった）。
+  文脈圧縮は `triggerTokens: 25000`・`slidingWindow.targetTokens: 8000`（既定では約10万トークンまで圧縮されず、
+  それまで毎ターン全文脈に課金される）
+- ツールは `look_closely`（`NON_BLOCKING`）の1つ。引数:
+  - `question`（必須）: ユーザーが知りたいこと。ユーザーの言葉をなるべくそのまま使う
+  - `goal`: ユーザーが最終的にやりたいこと。分からなければ空文字
+  - `next_step`: ユーザーが前の案内を済ませた、または「次は？」と聞いたときだけ `true`
+  - `points_at_cursor`: 「これ」「ここ」「この」がマウスの位置を指しているときだけ `true`
+  - 結果はクライアントが返す。persona は結果の「言うこと」「印」（出した／なし）「種類」（相談・失敗・完了など）を読む
 - 再開ハンドルは setup の一部なので、張り直すたびに `handle` 付きで発行し直す
 - 利用枠: **新しいセッション（`handle` なし）だけが1ユニット**（`operation: "live"`、`unit_type: "session"`）。
   再開は quota を確かめず、消費もしない。時間・ターンでの計上は課金の読みが確定してから決める
