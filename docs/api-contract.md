@@ -557,29 +557,3 @@ v3で文体・関係性メモリを廃止したため、`/ai/memory/distill` と
 （正本 [v3-tool-fit-plan.md](v3-tool-fit-plan.md)）。
 
 各routeの入力検証と認可は `web/app/api` の現行実装を正とする。
-
-## Jev候補実験（短命ブランチ限定・未配備）
-
-`experiment/jev-copilot-candidates` の `POST /api/ai/jev-candidates`。
-通常のVision routeを変更せず、macOS Debug版から明示実行する限定実験。
-`TYPESAFE_API_KEY` と `JEV_EXPERIMENT_USER_IDS`（許可する認証user IDのカンマ区切り）が
-サーバーに揃った場合だけ有効。設定なしは503、許可リスト外は403。既存の認証・利用枠を適用する。
-
-- envelope: `request_id`（UUID）、`operation: "jev_candidates"`、`client`（macos/app_version/build_number）、`input`。
-- input: `snapshot_id`（UUID）、`goal`（1〜4000文字）、`previous_instruction`（4000文字以下）、
-  `turns`（最大20件、role/text）、`candidates`（1〜254件、id/label/role/parent_label/states）、
-  任意の `context`（app_name/bundle_id/window_title）。画像・座標は受け付けない。入力上限512KB。
-- 候補IDは一意の `ax:<数字>`。TypeSafe Choiceに候補と `none`（判断保留）を渡す。
-  モデル名の正本は `lib/server/ai-routing.ts` の `JEV_EXPERIMENT_MODEL`。自動再試行・他モデルへのfallbackなし。
-- 応答: `request_id`、`snapshot_id`、`result`（choice/confidence/probabilities/model/input_tokens/provider_ms）。
-  未知ID・欠落ID・範囲外確率・不正な確率合計を拒否する。provider期限10秒、route期限20秒。
-- 成功時は既存の `vision` usageとして1回計上し、metadataに実験名・候補数のみを残す。
-  画面内容・目的・会話はusageへ保存しない。上流のエラー本文も記録・返却しない。
-- 実機・精度・遅延は未検証。実験終了時にroute・engine・テスト・モデル定義・環境変数・本節を撤去する。
-
-OpenRouter経由の段階確認は、Gateway routeを起動せず、キーを置いた環境で次のCLIを使う。
-合成入力は `node --experimental-strip-types scripts/probe-openrouter-jev.mjs`、Mac側で保存したAX JSONは
-`node --experimental-strip-types scripts/probe-openrouter-jev.mjs --snapshot /絶対パス/snapshot.json`
-でdry-run（app_name・候補件数・snapshot_idのみ表示）になる。内容を確認してから同じコマンドに
-`--send`を付けた時だけ、1回だけOpenRouter Decisions APIへ送信する。JSONは上記input契約に従い、
-画像・座標・URLは含めない。自動再送はしない。

@@ -10,9 +10,6 @@ import {
   type OperationalNotice,
 } from "@/lib/server/operational-notice";
 
-// Short-lived Jev experiment; never used by the production Vision route.
-export const JEV_EXPERIMENT_MODEL = "jev-latest";
-
 export type AIFeature =
   | "review"
   | "vision"
