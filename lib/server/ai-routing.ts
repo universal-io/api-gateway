@@ -60,6 +60,14 @@ export const AI_MODEL_ROUTES: Readonly<Record<AIFeature, AIModelRoute>> = {
   },
 };
 
+/**
+ * R18 voice companion (experiment). A Live session is one long connection to
+ * one model, so there is no second model to fall back to mid-conversation:
+ * this sits outside AI_MODEL_ROUTES and its primary/secondary rule on purpose.
+ * The client never names it; it is locked into the ephemeral token.
+ */
+export const LIVE_MODEL = { vendor: "google", modelId: "gemini-3.8-live" } as const;
+
 export const AI_MODELS_UNAVAILABLE_MESSAGE =
   "一次モデルと二次モデルの両方が応答しませんでした。少し待ってから再試行してください。";
 

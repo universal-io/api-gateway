@@ -40,9 +40,10 @@ buildと、通常requestから`selection`だけが増えるmacOS request比較�
 - Content-Type: `application/json`（transcribeのみmultipart）
 - macOSクライアントにローカルGateway、BYOK、別endpointへのfallbackはない。
 - Gateway内のモデル順序は `web/lib/server/ai-routing.ts` が唯一の正本。全AI機能が一次・二次を
-  1つずつ持ち、一次失敗時だけ二次を1回実行する。
+  1つずつ持ち、一次失敗時だけ二次を1回実行する。例外は `live-token`（R18の実験）だけで、
+  会話の途中で別モデルへ移れないため二次を持たない（`LIVE_MODEL`）。
 - `request_id` は全AIリクエストで必須。
-- `review`、`transcribe`、`vision`、`suggest`の各routeは
+- `review`、`transcribe`、`vision`、`suggest`、`live-token`の各routeは
   認証付きGETをウォームアップとして受け付ける。認証・quota前処理だけを実行して成功時`204`を返し、
   providerを呼ばずusageも記録しない。
 - POSTのusage記録は応答後に実行するため、成功・モデルエラーとも記録DBの待ち時間を応答へ加えない。
@@ -433,6 +434,24 @@ macOSはこの名前をパネルに表示する。Skillのサイレント注入�
 - `meta`/usageには`fact_question_asked`（真偽）だけを記録し、キーも値も残さない
 - 質問を返した時点で`bs_fact_prompts.ask_count`を応答後に加算する。答えずに閉じても1回として数え、
   通算3回でそのキーを打ち切る
+
+## POST /ai/live-token（R18 声の相棒・実験）
+
+声の相棒（app-mac マスタープラン R18）が Gemini Live API へ直接つなぐための、使い捨てトークンを発行する。
+サーバーレスの route は WebSocket を保持できないため、会話そのものは Gateway を通らない。
+**鍵はクライアントに出ず、setup 全体（モデル・persona・ツール・VAD・文字起こし・再開・圧縮）がトークンに固定される。**
+実験なので、終了時に route・`lib/server/live-session.ts`・`LIVE_MODEL`・本節を撤去する。
+
+- request: 共通 envelope。`operation: "live_token"`、`input.handle?`（再開ハンドル、4096文字以下）、
+  `input.voice?`（`Kore`／`Aoede`／`Leda`／`Zephyr`／`Puck`／`Charon`／`Fenrir`／`Orus`、既定 `Kore`）
+- response: `result{token, setup, expires_at, new_session_expires_at, resumed}`、`meta{model_vendor, model_id, latency_ms}`
+  - `token` は `auth_tokens/…`。1回だけ、発行から60秒以内にセッションを開ける。寿命は2時間
+  - クライアントは `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=<token>`
+    へつなぎ、最初のメッセージとして `{"setup": <result.setup>}` をそのまま送る
+- 再開ハンドルは setup の一部なので、張り直すたびに `handle` 付きで発行し直す
+- 利用枠: **新しいセッション（`handle` なし）だけが1ユニット**（`operation: "live"`、`unit_type: "session"`）。
+  再開は quota を確かめず、消費もしない。時間・ターンでの計上は課金の読みが確定してから決める
+- 正本: `lib/server/live-session.ts`（setup と persona）、`app/api/ai/live-token/route.ts`
 
 ## ユーザーファクト
 
