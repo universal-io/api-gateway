@@ -45,7 +45,10 @@ export const AI_MODEL_ROUTES: Readonly<Record<AIFeature, AIModelRoute>> = {
     // sends `detail: VISION_IMAGE_DETAIL` ("original"), while chat_completions
     // sends the image with no detail request at all and takes whatever the
     // vendor's default downscaling gives. See docs/guidance-accuracy-plan.md.
-    primary: { vendor: "openai", modelId: "gpt-5.6-luna", api: "responses" },
+    //
+    // gpt-6-luna since 2026-10-09 (the voice companion's eye reads through
+    // this route too); it takes the same request, effort "none" included.
+    primary: { vendor: "openai", modelId: "gpt-6-luna", api: "responses" },
     secondary: { vendor: "openai", modelId: "gpt-5.4-mini", api: "responses" },
   },
   suggest: {

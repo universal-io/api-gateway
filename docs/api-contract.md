@@ -339,7 +339,7 @@ validation後は新fieldと同じ内部型・同じpromptへ合流する。内�
   },
   "meta": {
     "model_vendor": "openai",
-    "model_id": "gpt-5.6-luna",
+    "model_id": "gpt-6-luna",
     "route": "snapshot_vlm",
     "api": "responses",
     "image_detail": "original",
