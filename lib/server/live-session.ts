@@ -39,6 +39,25 @@ export const DEFAULT_LIVE_VOICE: LiveVoice = "Kore";
 export type LiveTurns = "server" | "client";
 export const DEFAULT_LIVE_TURNS: LiveTurns = "server";
 
+/**
+ * How a look_closely call is answered.
+ *
+ * - "sync": the tool response is the eye's answer, 5–7 s later. Builds up to
+ *   24 send nothing and get this.
+ * - "async": the client answers at once with 「田中さんが確認中です。」, and the
+ *   eye's answer arrives later as a turn starting 「（田中さんから）」. Gemini 3.1
+ *   Flash Live does not take asynchronous function calls (it says nothing
+ *   until the tool response), so the client makes the wait asynchronous: the
+ *   companion keeps talking while the eye reads (owner, 2026-10-09). Probed
+ *   2026-10-09 on 3.1 with this wording: it said one line
+ *   (「田中さんに確認してもらいますね。」) in about 0.7 s, answered side
+ *   questions, guessed about the screen 0 times in 20 sessions, and relayed
+ *   the later answer with the 「」 names exact. The sync wording read the
+ *   acknowledgement aloud instead (2 of 3).
+ */
+export type LiveLook = "sync" | "async";
+export const DEFAULT_LIVE_LOOK: LiveLook = "sync";
+
 /** Long enough for an hour of talking. The token is single-use and only
  * opens a session during its first minute; every reconnect mints a new one. */
 export const LIVE_TOKEN_LIFETIME_MS = 2 * 60 * 60 * 1000;
@@ -114,8 +133,34 @@ look_closely の呼び方:
 - 「（開始）」と言われたら、名乗ってから、その知らせのアプリに一言触れて、何に困っているかを短く聞きます（例:「こんにちは、山田です。いまGoogle アナリティクスを見ていますね。何かお困りですか？」）。知らせが届いていなければ、名乗って聞くだけにします。`;
 
 /** The setup message body (`{"setup": <this>}`) for one connection. */
-export function liveSetup(options: { voice: LiveVoice; handle?: string; turns?: LiveTurns }) {
+/** The persona for one way of answering looks (see LiveLook). */
+export function liveSystemInstruction(look: LiveLook): string {
+  if (look === "sync") return LIVE_SYSTEM_INSTRUCTION;
+  const swaps: [string, string][] = [
+    [
+      "- look_closely や読み手など、仕組みの話はユーザーにしません。",
+      "- look_closely など、仕組みの話はユーザーにしません。",
+    ],
+    [
+      "- 呼んだあとは、結果が来るまで何も言いません。つなぎの「確認しますね」はシステムが流します。",
+      "- 呼ぶと、すぐに「田中さんが確認中です」と返ってきます。そうしたら「田中さんに確認してもらいますね。」と一言だけ言います。結果は、あとから「（田中さんから）」で始まる知らせで届きます。届くまでは、ほかの話には普通に答えますが、画面のことは推測で答えません。",
+    ],
+    [
+      "- 結果が来たら、前置きなしに「言うこと」を",
+      "- 「（田中さんから）」で始まる知らせが届いたら、前置きなしに「言うこと」を",
+    ],
+  ];
+  return swaps.reduce((text, [from, to]) => {
+    // A swap that no longer matches would leave the sync wording in place
+    // silently; the persona and this list change together.
+    if (!text.includes(from)) throw new Error(`async persona: missing line: ${from}`);
+    return text.replace(from, to);
+  }, LIVE_SYSTEM_INSTRUCTION);
+}
+
+export function liveSetup(options: { voice: LiveVoice; handle?: string; turns?: LiveTurns; look?: LiveLook }) {
   const turns = options.turns ?? DEFAULT_LIVE_TURNS;
+  const look = options.look ?? DEFAULT_LIVE_LOOK;
   return {
     model: `models/${LIVE_MODEL.modelId}`,
     generationConfig: {
@@ -126,7 +171,7 @@ export function liveSetup(options: { voice: LiveVoice; handle?: string; turns?: 
       // What dense text needs (12px Japanese survived it in the POC).
       mediaResolution: "MEDIA_RESOLUTION_HIGH",
     },
-    systemInstruction: { role: "user", parts: [{ text: LIVE_SYSTEM_INSTRUCTION }] },
+    systemInstruction: { role: "user", parts: [{ text: liveSystemInstruction(look) }] },
     tools: [
       {
         functionDeclarations: [
@@ -248,4 +293,9 @@ export function parseLiveVoice(value: unknown): LiveVoice | null {
 export function parseLiveTurns(value: unknown): LiveTurns | null {
   if (value === undefined) return DEFAULT_LIVE_TURNS;
   return value === "server" || value === "client" ? value : null;
+}
+
+export function parseLiveLook(value: unknown): LiveLook | null {
+  if (value === undefined) return DEFAULT_LIVE_LOOK;
+  return value === "sync" || value === "async" ? value : null;
 }
