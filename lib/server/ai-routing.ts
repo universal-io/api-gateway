@@ -68,8 +68,15 @@ export const AI_MODEL_ROUTES: Readonly<Record<AIFeature, AIModelRoute>> = {
  * one model, so there is no second model to fall back to mid-conversation:
  * this sits outside AI_MODEL_ROUTES and its primary/secondary rule on purpose.
  * The client never names it; it is locked into the ephemeral token.
+ *
+ * gemini-3.1-flash-live-preview since 2026-10-09. gemini-3.8-live garbled the
+ * first words of replies in Japanese: about 4 in 10 greetings, and relays of
+ * the eye's answer starting 「左側の…」 heard as 「右側」. It did so with no
+ * persona and no tools too, so it is the model. 3.1 Flash Live spoke every
+ * start right (greeting, relay, next step, small talk: 10/10 each) with the
+ * same persona and setup, as fast, and accepted every feature used here.
  */
-export const LIVE_MODEL = { vendor: "google", modelId: "gemini-3.8-live" } as const;
+export const LIVE_MODEL = { vendor: "google", modelId: "gemini-3.1-flash-live-preview" } as const;
 
 export const AI_MODELS_UNAVAILABLE_MESSAGE =
   "一次モデルと二次モデルの両方が応答しませんでした。少し待ってから再試行してください。";
