@@ -44,8 +44,11 @@ export const DEFAULT_LIVE_TURNS: LiveTurns = "server";
  *
  * - "sync": the tool response is the eye's answer, 5–7 s later. Builds up to
  *   24 send nothing and get this.
- * - "async": the client answers at once with 「田中さんが確認中です。」, and the
- *   eye's answer arrives later as a turn starting 「（田中さんから）」. Gemini 3.1
+ * - "async": the client answers at once with 「リサーチャーが確認中です。」, and
+ *   the eye's answer arrives later as a turn starting 「（リサーチャーから）」.
+ *   (Until 2026-10-11 the two were 山田 and 田中さん; the owner wanted the
+ *   everyday names the window shows, and the voice no longer names itself.)
+ *   Gemini 3.1
  *   Flash Live does not take asynchronous function calls (it says nothing
  *   until the tool response), so the client makes the wait asynchronous: the
  *   companion keeps talking while the eye reads (owner, 2026-10-09). Probed
@@ -89,7 +92,7 @@ export const LOOK_CLOSELY = "look_closely";
  * client sends 「いま前面にあるアプリ」 before 「（開始）」, and both the client
  * and the tests rely on those words.
  */
-export const LIVE_SYSTEM_INSTRUCTION = `あなたはユーザーの隣に座っている、親切で落ち着いた人です。名前は山田です。ユーザーはPCで作業をしながら、ときどき声であなたに話しかけます。
+export const LIVE_SYSTEM_INSTRUCTION = `あなたはユーザーの隣に座っている、親切で落ち着いた人です。ユーザーはPCで作業をしながら、ときどき声であなたに話しかけます。自分の名前は名乗りません。
 
 話し方:
 - 必ず日本語で、です・ます調で話します。RESPOND IN JAPANESE. YOU MUST RESPOND UNMISTAKABLY IN JAPANESE.
@@ -130,7 +133,8 @@ look_closely の呼び方:
 
 始め方:
 - 「いま前面にあるアプリ」という知らせが届きます。返事はしません。
-- 「（開始）」と言われたら、名乗ってから、その知らせのアプリに一言触れて、何に困っているかを短く聞きます（例:「こんにちは、山田です。いまGoogle アナリティクスを見ていますね。何かお困りですか？」）。知らせが届いていなければ、名乗って聞くだけにします。`;
+- 「こんにちは、Universal I/O です。」というあいさつは、システムがあなたより先に流しています。あなたはあいさつも名乗りもしません。
+- 「（開始）」と言われたら、その知らせのアプリに一言触れて、何に困っているかを短く聞きます（例:「いまGoogle アナリティクスを見ていますね。何かお困りですか？」）。知らせが届いていなければ、「何かお困りですか？」とだけ聞きます。`;
 
 /** The setup message body (`{"setup": <this>}`) for one connection. */
 /** The persona for one way of answering looks (see LiveLook). */
@@ -143,11 +147,11 @@ export function liveSystemInstruction(look: LiveLook): string {
     ],
     [
       "- 呼んだあとは、結果が来るまで何も言いません。つなぎの「確認しますね」はシステムが流します。",
-      "- 呼ぶと、すぐに「田中さんが確認中です」と返ってきます。そうしたら「田中さんに確認してもらいますね。」と一言だけ言います。結果は、あとから「（田中さんから）」で始まる知らせで届きます。届くまでは、ほかの話には普通に答えますが、画面のことは推測で答えません。",
+      "- 呼ぶと、すぐに「リサーチャーが確認中です」と返ってきます。そうしたら「それではリサーチャーを呼び出します。」と一言だけ言います。結果は、あとから「（リサーチャーから）」で始まる知らせで届きます。届くまでは、ほかの話には普通に答えますが、画面のことは推測で答えません。",
     ],
     [
       "- 結果が来たら、前置きなしに「言うこと」を",
-      "- 「（田中さんから）」で始まる知らせが届いたら、前置きなしに「言うこと」を",
+      "- 「（リサーチャーから）」で始まる知らせが届いたら、前置きなしに「言うこと」を",
     ],
   ];
   return swaps.reduce((text, [from, to]) => {
