@@ -78,6 +78,11 @@ export const AI_MODEL_ROUTES: Readonly<Record<AIFeature, AIModelRoute>> = {
  */
 export const LIVE_MODEL = { vendor: "google", modelId: "gemini-3.1-flash-live-preview" } as const;
 
+/** The companion's reflex (app-mac build 37, experiment): a System One decision
+ * model reached through OpenRouter's decisions API. Not a primary/secondary
+ * route — a decision that is late is dropped, never retried on another model. */
+export const DECIDE_MODEL = { vendor: "typesafe", modelId: "typesafe/jev-1.13" } as const;
+
 export const AI_MODELS_UNAVAILABLE_MESSAGE =
   "一次モデルと二次モデルの両方が応答しませんでした。少し待ってから再試行してください。";
 

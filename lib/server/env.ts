@@ -10,6 +10,8 @@ export type ServerEnv = {
   openaiApiKey: string | null;
   anthropicApiKey: string | null;
   cerebrasApiKey: string | null;
+  /** OpenRouter, for the companion's reflex model (lib/server/decide.ts). */
+  openrouterApiKey: string | null;
   /** Lowercased emails allowed into /admin (docs/admin-dashboard-plan.md §2). */
   adminEmails: string[];
   /** Stripe secret key. Its `sk_test_`/`sk_live_` prefix is also what decides
@@ -43,6 +45,7 @@ export function getServerEnv(): ServerEnv {
     openaiApiKey: normalize(process.env.OPENAI_API_KEY),
     anthropicApiKey: normalize(process.env.ANTHROPIC_API_KEY),
     cerebrasApiKey: normalize(process.env.CEREBRAS_API_KEY),
+    openrouterApiKey: normalize(process.env.OPENROUTER_API_KEY),
     // Comma-separated allowlist for the admin console (v0 authorization;
     // admin-dashboard-plan §2). Empty list means nobody is an admin.
     adminEmails: parseEmailList(process.env.ADMIN_EMAILS),

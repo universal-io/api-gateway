@@ -470,6 +470,26 @@ macOSはこの名前をパネルに表示する。Skillのサイレント注入�
   再開は quota を確かめず、消費もしない。時間・ターンでの計上は課金の読みが確定してから決める
 - 正本: `lib/server/live-session.ts`（setup と persona）、`app/api/ai/live-token/route.ts`
 
+## /api/ai/decide（声の相棒の反射、実験）
+
+声の相棒（app-mac build 37〜）が、話している途中の文字起こしや読み手の答えについて、**型つきの判定**を
+System One の判定モデル（TypeSafe Jev、OpenRouter の decisions API 経由）に 1 往復で求める。文章は生成しない。
+実験なので、終了時に route・`lib/server/decide.ts`・`DECIDE_MODEL`・本節を撤去する。
+
+- request: 共通 envelope。`operation: "decide"`、`client.platform: "macos"`、`input.state`（文字列、30,000 文字以下。
+  JSON 文字列でよい）、`input.questions`（1〜8 件。名前は `^[a-z][a-z0-9_]{0,31}$`）。各質問は
+  `{type: "choice", instructions, criteria: {<option>: <説明>}}`（選択肢 2〜64）、
+  `{type: "score", instructions, criteria: [<段階の説明>…]}`（2〜10 段階）、`{type: "noul", instructions}` のいずれか。
+  知らないフィールドは捨てる
+- response: `result.answers`（質問名ごと。choice は `choice`／`confidence`／`probabilities`、score は `score`／`confidence`／
+  `probabilities`／`legend`、noul は `noul`）、`meta{model_vendor, model_id, latency_ms, input_tokens}`。
+  答えは質問の形と突き合わせて検証する（選択肢の集合が一致、確率の和が 1、選んだものが最大）。合わなければ `502 PROVIDER_ERROR`
+- 対象: `ADMIN_EMAILS` のユーザーだけ（それ以外は `403 EXPERIMENT_FORBIDDEN`）。鍵は `OPENROUTER_API_KEY`（無ければ `503`）
+- **利用枠に数えず、usage も記録しない。** 月次の数え方は operation を区別しないので、1 セッションに数十回ある判定を
+  数えると枠が尽きる。回数と遅さは Vercel のログ（`[/api/ai/decide]`）で見る
+- 上流の時間切れは 8 秒。再試行しない（遅い反射は役に立たない。クライアントが無しで進む）
+- 正本: `lib/server/decide.ts`、`app/api/ai/decide/route.ts`
+
 ## ユーザーファクト
 
 `/api/facts` はSkillsが宣言したキー語彙に沿って、ユーザー本人に関する事実を保持する。

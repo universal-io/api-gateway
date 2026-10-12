@@ -34,6 +34,7 @@
 - `POST /api/ai/suggest` — コンポーズの先回り文案
 - `POST /api/ai/transcribe` — 音声の文字起こし
 - `POST /api/ai/live-token` — 声の相棒（R18・実験）がGemini Liveへつなぐ使い捨てトークンの発行
+- `POST /api/ai/decide` — 声の相棒の反射（R18・実験）。System One の判定モデル（Jev）に型つきの判定を1往復で求める。利用枠に数えない
 
 各AI routeは**認証付きGETをウォームアップとして受け付ける**（providerを呼ばず204）。
 
