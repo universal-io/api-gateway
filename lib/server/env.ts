@@ -12,6 +12,9 @@ export type ServerEnv = {
   cerebrasApiKey: string | null;
   /** OpenRouter, for the companion's reflex model (lib/server/decide.ts). */
   openrouterApiKey: string | null;
+  /** Supabase user ids allowed to use /api/ai/decide while it is an
+   * experiment, besides the admin emails. */
+  reflexUserIds: string[];
   /** Lowercased emails allowed into /admin (docs/admin-dashboard-plan.md §2). */
   adminEmails: string[];
   /** Stripe secret key. Its `sk_test_`/`sk_live_` prefix is also what decides
@@ -46,6 +49,7 @@ export function getServerEnv(): ServerEnv {
     anthropicApiKey: normalize(process.env.ANTHROPIC_API_KEY),
     cerebrasApiKey: normalize(process.env.CEREBRAS_API_KEY),
     openrouterApiKey: normalize(process.env.OPENROUTER_API_KEY),
+    reflexUserIds: parseList(process.env.REFLEX_USER_IDS),
     // Comma-separated allowlist for the admin console (v0 authorization;
     // admin-dashboard-plan §2). Empty list means nobody is an admin.
     adminEmails: parseEmailList(process.env.ADMIN_EMAILS),
@@ -56,6 +60,13 @@ export function getServerEnv(): ServerEnv {
     stripeSecretKey: normalize(process.env.STRIPE_SECRET_KEY),
     stripeWebhookSecret: normalize(process.env.STRIPE_WEBHOOK_SECRET),
   };
+}
+
+function parseList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function parseEmailList(value: string | undefined): string[] {

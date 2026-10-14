@@ -484,7 +484,8 @@ System One の判定モデル（TypeSafe Jev、OpenRouter の decisions API 経�
 - response: `result.answers`（質問名ごと。choice は `choice`／`confidence`／`probabilities`、score は `score`／`confidence`／
   `probabilities`／`legend`、noul は `noul`）、`meta{model_vendor, model_id, latency_ms, input_tokens}`。
   答えは質問の形と突き合わせて検証する（選択肢の集合が一致、確率の和が 1、選んだものが最大）。合わなければ `502 PROVIDER_ERROR`
-- 対象: `ADMIN_EMAILS` のユーザーだけ（それ以外は `403 EXPERIMENT_FORBIDDEN`）。鍵は `OPENROUTER_API_KEY`（無ければ `503`）
+- 対象: `REFLEX_USER_IDS`（ユーザー ID）か `ADMIN_EMAILS` のユーザーだけ（それ以外は `403 EXPERIMENT_FORBIDDEN`。理由は Vercel のログに `forbidden:` で出る）。
+  鍵は `OPENROUTER_API_KEY`（無ければ `503`）。**2026-10-14 の実機では管理者のアカウントでも 403 になった**（JWT の email 申告に依存していた）ので、ID の門を足した
 - **利用枠に数えず、usage も記録しない。** 月次の数え方は operation を区別しないので、1 セッションに数十回ある判定を
   数えると枠が尽きる。回数と遅さは Vercel のログ（`[/api/ai/decide]`）で見る
 - 上流の時間切れは 8 秒。再試行しない（遅い反射は役に立たない。クライアントが無しで進む）

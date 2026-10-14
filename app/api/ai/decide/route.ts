@@ -47,7 +47,16 @@ export async function POST(request: Request): Promise<Response> {
 
     const auth = await authenticateAIRequest(request);
     const env = getServerEnv();
-    if (!auth.email || !env.adminEmails.includes(auth.email.toLowerCase())) {
+    // By user id first: the AI routes verify the JWT locally, and whether its
+    // claims carry an email is not something this gate should depend on
+    // (build 37 on the device, 2026-10-14: 403 for the admin's own account).
+    const allowed = env.reflexUserIds.includes(auth.userId)
+      || (auth.email !== null && env.adminEmails.includes(auth.email.toLowerCase()));
+    if (!allowed) {
+      console.warn(
+        `[/api/ai/decide] forbidden: user=${auth.userId} email=${auth.email ? "present" : "absent"} ` +
+          `ids=${env.reflexUserIds.length} admins=${env.adminEmails.length}`,
+      );
       return errorResponse(403, "EXPERIMENT_FORBIDDEN", "このアカウントは反射の実験の対象外です。", requestId);
     }
     if (!env.openrouterApiKey) {
